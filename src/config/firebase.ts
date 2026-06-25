@@ -6,18 +6,7 @@
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
-
-// Safe loading of firebase config to prevent compile-time crashes
-let firebaseConfig: any = null;
-
-try {
-  // Try to load the config from the generated file if present (Phase 2/3)
-  // We use this dynamic-style or a try-catch for safe runtime detection
-  firebaseConfig = require("./firebase-applet-config.json");
-} catch (e) {
-  // Fallback placeholder during Phase 1 Workspace Setup
-  firebaseConfig = null;
-}
+import firebaseConfig from "../../firebase-applet-config.json";
 
 const isConfigured = !!firebaseConfig && !!firebaseConfig.apiKey;
 
@@ -84,7 +73,7 @@ export interface FirestoreErrorInfo {
 /**
  * Handles Firestore security exceptions by packaging diagnostic auth metrics into a standard JSON message.
  */
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {

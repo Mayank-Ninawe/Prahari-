@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { GeminiService } from "./server/geminiService.js";
 
 // Load environment variables
 dotenv.config();
@@ -18,7 +19,7 @@ async function startServer() {
   app.use(express.json());
 
   // =========================================================================
-  // API PLACEHOLDERS FOR LATER PHASES (To be implemented in Phase 2)
+  // PRODUCTION GEMINI INTELLIGENCE ROUTES
   // =========================================================================
 
   // Health check endpoint
@@ -30,39 +31,72 @@ async function startServer() {
     });
   });
 
-  // Placeholder: Risk Scoring Engine Endpoint
-  app.post("/api/rescue/assess-risk", (req, res) => {
-    // Phase 1 Placeholder
-    res.json({
-      success: true,
-      message: "assess-risk endpoint placeholder active (Phase 1).",
-      data: {
-        riskScore: 0.15,
-        riskLevel: "LOW",
-        factors: ["Workspace setup initialized successfully"],
-        detectedDeadlinesCount: 0,
+  // Real Risk Scoring Engine Endpoint
+  app.post("/api/rescue/assess-risk", async (req, res) => {
+    try {
+      const { task, currentTime, userContext } = req.body;
+      if (!task || !task.title) {
+        return res.status(400).json({ success: false, error: "Task payload is required." });
       }
-    });
+      console.log(`[Risk Engine] Assessing task: "${task.title}"`);
+      const assessment = await GeminiService.assessTaskRisk(task, currentTime, userContext);
+      res.json({ success: true, data: assessment });
+    } catch (err: any) {
+      console.error("API Error in assess-risk:", err);
+      res.status(500).json({ success: false, error: err.message || "Failed to assess risk." });
+    }
   });
 
-  // Placeholder: AI Rescue Plan Generation
-  app.post("/api/rescue/generate-plan", (req, res) => {
-    // Phase 1 Placeholder
-    res.json({
-      success: true,
-      message: "generate-plan endpoint placeholder active (Phase 1).",
-      data: {
-        planId: "placeholder-plan-id",
-        status: "draft",
-        compressionRatio: "100%",
-        rescueSteps: [],
+  // Real AI Rescue Plan Generation Endpoint
+  app.post("/api/rescue/generate-plan", async (req, res) => {
+    try {
+      const { task, riskAssessment, currentTime, userContext } = req.body;
+      if (!task || !task.title || !riskAssessment) {
+        return res.status(400).json({ success: false, error: "Task and riskAssessment are required." });
       }
-    });
+      console.log(`[Rescue Engine] Generating plan for: "${task.title}"`);
+      const plan = await GeminiService.generateRescuePlan(task, riskAssessment, currentTime, userContext);
+      res.json({ success: true, data: plan });
+    } catch (err: any) {
+      console.error("API Error in generate-plan:", err);
+      res.status(500).json({ success: false, error: err.message || "Failed to generate plan." });
+    }
   });
 
-  // Placeholder: FCM Web Push Token Registration
+  // Real Plan Compression Endpoint
+  app.post("/api/rescue/compress-plan", async (req, res) => {
+    try {
+      const { task, originalPlan, remainingTimeContext, userContext } = req.body;
+      if (!task || !originalPlan || !remainingTimeContext) {
+        return res.status(400).json({ success: false, error: "Task, original plan and remaining time context are required." });
+      }
+      console.log(`[Compression Engine] Compressing plan for: "${task.title}"`);
+      const compressed = await GeminiService.compressRescuePlan(task, originalPlan, remainingTimeContext, userContext);
+      res.json({ success: true, data: compressed });
+    } catch (err: any) {
+      console.error("API Error in compress-plan:", err);
+      res.status(500).json({ success: false, error: err.message || "Failed to compress plan." });
+    }
+  });
+
+  // Real Reprioritization Endpoint
+  app.post("/api/rescue/reprioritize", async (req, res) => {
+    try {
+      const { selectedTask, taskList, currentTime } = req.body;
+      if (!selectedTask || !taskList) {
+        return res.status(400).json({ success: false, error: "Selected task and task list are required." });
+      }
+      console.log(`[Reprioritize Engine] Reprioritizing around task: "${selectedTask.title}"`);
+      const reprioritized = await GeminiService.reprioritizeTasks(selectedTask, taskList, currentTime);
+      res.json({ success: true, data: reprioritized });
+    } catch (err: any) {
+      console.error("API Error in reprioritize:", err);
+      res.status(500).json({ success: false, error: err.message || "Failed to reprioritize." });
+    }
+  });
+
+  // Placeholder: FCM Web Push Token Registration (Phase 1 Placeholder preserved)
   app.post("/api/notifications/register", (req, res) => {
-    // Phase 1 Placeholder
     res.json({
       success: true,
       message: "Notification token registered (Workspace stub active)."
