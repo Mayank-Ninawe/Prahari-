@@ -1,0 +1,6 @@
+{
+  "name": "Prahari AI",
+  "description": "An AI-powered deadline rescue system that detects risk, generates recovery plans, and compresses work into minimum viable execution paths.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
