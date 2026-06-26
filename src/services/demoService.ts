@@ -20,6 +20,19 @@ export interface DemoScenario {
   plan: Omit<RescuePlanDocument, "planId" | "createdAt" | "updatedAt">;
 }
 
+function isOfflineError(error: any): boolean {
+  if (!db) return true;
+  if (!error) return false;
+  const msg = error.message || String(error);
+  return (
+    msg.includes("offline") || 
+    msg.includes("client is offline") || 
+    msg.includes("Failed to get document") ||
+    msg.includes("Failed to query") ||
+    msg.includes("uninitialized")
+  );
+}
+
 export const DemoService = {
   getScenarios(): DemoScenario[] {
     const now = new Date();
@@ -283,48 +296,129 @@ export const DemoService = {
   async seedDemoWorkspace(uid: string): Promise<void> {
     if (!uid) return;
 
-    // 1. Delete all existing tasks & plans first to avoid pollution
-    const tasksCol = collection(db, "users", uid, "tasks");
-    const tasksSnap = await getDocs(tasksCol);
-    for (const d of tasksSnap.docs) {
-      // delete rescuePlans subcollection
-      const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
-      const plansSnap = await getDocs(plansCol);
-      for (const p of plansSnap.docs) {
-        await deleteDoc(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
+    try {
+      let batch = writeBatch(db);
+      let opCount = 0;
+
+      const commitIfNeeded = async (force = false) => {
+        if (opCount > 0 && (force || opCount >= 450)) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opCount = 0;
+        }
+      };
+
+      // 1. Delete all existing tasks & plans first to avoid pollution
+      const tasksCol = collection(db, "users", uid, "tasks");
+      const tasksSnap = await getDocs(tasksCol);
+      for (const d of tasksSnap.docs) {
+        // delete rescuePlans subcollection
+        const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
+        const plansSnap = await getDocs(plansCol);
+        for (const p of plansSnap.docs) {
+          batch.delete(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
+          opCount++;
+          await commitIfNeeded();
+        }
+        batch.delete(doc(db, "users", uid, "tasks", d.id));
+        opCount++;
+        await commitIfNeeded();
       }
-      await deleteDoc(doc(db, "users", uid, "tasks", d.id));
-    }
 
-    // 2. Clear all existing notifications to match
-    const notifsCol = collection(db, "users", uid, "notifications");
-    const notifsSnap = await getDocs(notifsCol);
-    for (const d of notifsSnap.docs) {
-      await deleteDoc(doc(db, "users", uid, "notifications", d.id));
-    }
+      // 2. Clear all existing notifications to match
+      const notifsCol = collection(db, "users", uid, "notifications");
+      const notifsSnap = await getDocs(notifsCol);
+      for (const d of notifsSnap.docs) {
+        batch.delete(doc(db, "users", uid, "notifications", d.id));
+        opCount++;
+        await commitIfNeeded();
+      }
 
-    // 3. Seed scenarios
-    const scenarios = this.getScenarios();
-    for (const sc of scenarios) {
-      const taskId = sc.id;
-      const planId = sc.plan.selectedPlanId || sc.task.selectedPlanId || "demo_plan_id";
+      // 3. Seed scenarios
+      const scenarios = this.getScenarios();
+      const localTasks: TaskDocument[] = [];
 
-      const taskDoc: TaskDocument = {
-        ...sc.task,
-        taskId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
+      for (const sc of scenarios) {
+        const taskId = sc.id;
+        const planId = sc.plan.selectedPlanId || sc.task.selectedPlanId || "demo_plan_id";
 
-      const planDoc: RescuePlanDocument = {
-        ...sc.plan,
-        planId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
+        const taskDoc: TaskDocument = {
+          ...sc.task,
+          taskId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
 
-      await setDoc(doc(db, "users", uid, "tasks", taskId), taskDoc);
-      await setDoc(doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId), planDoc);
+        const planDoc: RescuePlanDocument = {
+          ...sc.plan,
+          planId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+
+        batch.set(doc(db, "users", uid, "tasks", taskId), taskDoc);
+        opCount++;
+        await commitIfNeeded();
+
+        batch.set(doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId), planDoc);
+        opCount++;
+        await commitIfNeeded();
+
+        // Prepare local representation
+        const localTask: TaskDocument = {
+          ...sc.task,
+          taskId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        const localPlan: RescuePlanDocument = {
+          ...sc.plan,
+          planId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        localTasks.push(localTask);
+        if (typeof window !== "undefined") {
+          localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify([localPlan]));
+        }
+      }
+
+      await commitIfNeeded(true);
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(localTasks));
+        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+      }
+    } catch (error) {
+      if (isOfflineError(error)) {
+        console.warn("Firestore offline - seeding Demo Workspace in localStorage");
+        if (typeof window !== "undefined") {
+          const scenarios = this.getScenarios();
+          const localTasks: TaskDocument[] = [];
+          for (const sc of scenarios) {
+            const taskId = sc.id;
+            const planId = sc.plan.selectedPlanId || sc.task.selectedPlanId || "demo_plan_id";
+            const localTask: TaskDocument = {
+              ...sc.task,
+              taskId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            const localPlan: RescuePlanDocument = {
+              ...sc.plan,
+              planId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            localTasks.push(localTask);
+            localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify([localPlan]));
+          }
+          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(localTasks));
+          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+        }
+        return;
+      }
+      throw error;
     }
   },
 
@@ -334,21 +428,57 @@ export const DemoService = {
   async resetToEmptyWorkspace(uid: string): Promise<void> {
     if (!uid) return;
 
-    const tasksCol = collection(db, "users", uid, "tasks");
-    const tasksSnap = await getDocs(tasksCol);
-    for (const d of tasksSnap.docs) {
-      const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
-      const plansSnap = await getDocs(plansCol);
-      for (const p of plansSnap.docs) {
-        await deleteDoc(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
-      }
-      await deleteDoc(doc(db, "users", uid, "tasks", d.id));
-    }
+    try {
+      let batch = writeBatch(db);
+      let opCount = 0;
 
-    const notifsCol = collection(db, "users", uid, "notifications");
-    const notifsSnap = await getDocs(notifsCol);
-    for (const d of notifsSnap.docs) {
-      await deleteDoc(doc(db, "users", uid, "notifications", d.id));
+      const commitIfNeeded = async (force = false) => {
+        if (opCount > 0 && (force || opCount >= 450)) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opCount = 0;
+        }
+      };
+
+      const tasksCol = collection(db, "users", uid, "tasks");
+      const tasksSnap = await getDocs(tasksCol);
+      for (const d of tasksSnap.docs) {
+        const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
+        const plansSnap = await getDocs(plansCol);
+        for (const p of plansSnap.docs) {
+          batch.delete(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
+          opCount++;
+          await commitIfNeeded();
+        }
+        batch.delete(doc(db, "users", uid, "tasks", d.id));
+        opCount++;
+        await commitIfNeeded();
+      }
+
+      const notifsCol = collection(db, "users", uid, "notifications");
+      const notifsSnap = await getDocs(notifsCol);
+      for (const d of notifsSnap.docs) {
+        batch.delete(doc(db, "users", uid, "notifications", d.id));
+        opCount++;
+        await commitIfNeeded();
+      }
+
+      await commitIfNeeded(true);
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
+        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+      }
+    } catch (error) {
+      if (isOfflineError(error)) {
+        console.warn("Firestore offline - resetting Demo Workspace in localStorage");
+        if (typeof window !== "undefined") {
+          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
+          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+        }
+        return;
+      }
+      throw error;
     }
   }
 };

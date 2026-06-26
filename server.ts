@@ -32,14 +32,16 @@ async function startServer() {
   });
 
   // Real Risk Scoring Engine Endpoint
+  // Real Risk Scoring Engine Endpoint
   app.post("/api/rescue/assess-risk", async (req, res) => {
     try {
       const { task, currentTime, userContext } = req.body;
+      const customKey = req.headers["x-gemini-api-key"] as string | undefined;
       if (!task || !task.title) {
         return res.status(400).json({ success: false, error: "Task payload is required." });
       }
       console.log(`[Risk Engine] Assessing task: "${task.title}"`);
-      const assessment = await GeminiService.assessTaskRisk(task, currentTime, userContext);
+      const assessment = await GeminiService.assessTaskRisk(task, currentTime, userContext, customKey);
       res.json({ success: true, data: assessment });
     } catch (err: any) {
       console.error("API Error in assess-risk:", err);
@@ -51,11 +53,12 @@ async function startServer() {
   app.post("/api/rescue/generate-plan", async (req, res) => {
     try {
       const { task, riskAssessment, currentTime, userContext } = req.body;
+      const customKey = req.headers["x-gemini-api-key"] as string | undefined;
       if (!task || !task.title || !riskAssessment) {
         return res.status(400).json({ success: false, error: "Task and riskAssessment are required." });
       }
       console.log(`[Rescue Engine] Generating plan for: "${task.title}"`);
-      const plan = await GeminiService.generateRescuePlan(task, riskAssessment, currentTime, userContext);
+      const plan = await GeminiService.generateRescuePlan(task, riskAssessment, currentTime, userContext, customKey);
       res.json({ success: true, data: plan });
     } catch (err: any) {
       console.error("API Error in generate-plan:", err);
@@ -67,11 +70,12 @@ async function startServer() {
   app.post("/api/rescue/compress-plan", async (req, res) => {
     try {
       const { task, originalPlan, remainingTimeContext, userContext } = req.body;
+      const customKey = req.headers["x-gemini-api-key"] as string | undefined;
       if (!task || !originalPlan || !remainingTimeContext) {
         return res.status(400).json({ success: false, error: "Task, original plan and remaining time context are required." });
       }
       console.log(`[Compression Engine] Compressing plan for: "${task.title}"`);
-      const compressed = await GeminiService.compressRescuePlan(task, originalPlan, remainingTimeContext, userContext);
+      const compressed = await GeminiService.compressRescuePlan(task, originalPlan, remainingTimeContext, userContext, customKey);
       res.json({ success: true, data: compressed });
     } catch (err: any) {
       console.error("API Error in compress-plan:", err);
@@ -83,11 +87,12 @@ async function startServer() {
   app.post("/api/rescue/reprioritize", async (req, res) => {
     try {
       const { selectedTask, taskList, currentTime } = req.body;
+      const customKey = req.headers["x-gemini-api-key"] as string | undefined;
       if (!selectedTask || !taskList) {
         return res.status(400).json({ success: false, error: "Selected task and task list are required." });
       }
       console.log(`[Reprioritize Engine] Reprioritizing around task: "${selectedTask.title}"`);
-      const reprioritized = await GeminiService.reprioritizeTasks(selectedTask, taskList, currentTime);
+      const reprioritized = await GeminiService.reprioritizeTasks(selectedTask, taskList, currentTime, customKey);
       res.json({ success: true, data: reprioritized });
     } catch (err: any) {
       console.error("API Error in reprioritize:", err);

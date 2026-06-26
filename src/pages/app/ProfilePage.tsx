@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User, Bell, Database, Calendar, ShieldCheck, ShieldAlert, Sparkles, Sliders, CheckCircle2, RefreshCw } from "lucide-react";
+import { User, Bell, Database, Calendar, ShieldCheck, ShieldAlert, Sparkles, Sliders, CheckCircle2, RefreshCw, Key, Lock } from "lucide-react";
 import { useAuth } from "../../components/ui/ProtectedRoute";
 import { FirebaseService } from "../../services/firebaseService";
 import { NotificationService } from "../../services/notificationService";
@@ -21,10 +21,32 @@ export function ProfilePage() {
   const [permissionState, setPermissionState] = useState<NotificationPermission>("default");
   const [notificationsSupported, setNotificationsSupported] = useState(false);
 
-  // Sync state with loaded userDoc and browser notification support
+  // Developer custom API credentials states
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [firebaseApiKey, setFirebaseApiKey] = useState("");
+  const [firebaseAuthDomain, setFirebaseAuthDomain] = useState("");
+  const [firebaseProjectId, setFirebaseProjectId] = useState("");
+  const [firebaseStorageBucket, setFirebaseStorageBucket] = useState("");
+  const [firebaseMessagingSenderId, setFirebaseMessagingSenderId] = useState("");
+  const [firebaseAppId, setFirebaseAppId] = useState("");
+  const [firebaseFirestoreDatabaseId, setFirebaseFirestoreDatabaseId] = useState("");
+
+  const [savingKeys, setSavingKeys] = useState(false);
+  const [keysSaveSuccess, setKeysSaveSuccess] = useState(false);
+
+  // Load keys and notification support on component mount
   useEffect(() => {
     setNotificationsSupported(NotificationService.isSupported());
     setPermissionState(NotificationService.getPermissionState());
+
+    setGeminiApiKey(localStorage.getItem("prahari_gemini_api_key") || "");
+    setFirebaseApiKey(localStorage.getItem("prahari_firebase_api_key") || "");
+    setFirebaseAuthDomain(localStorage.getItem("prahari_firebase_auth_domain") || "");
+    setFirebaseProjectId(localStorage.getItem("prahari_firebase_project_id") || "");
+    setFirebaseStorageBucket(localStorage.getItem("prahari_firebase_storage_bucket") || "");
+    setFirebaseMessagingSenderId(localStorage.getItem("prahari_firebase_messaging_sender_id") || "");
+    setFirebaseAppId(localStorage.getItem("prahari_firebase_app_id") || "");
+    setFirebaseFirestoreDatabaseId(localStorage.getItem("prahari_firebase_firestore_database_id") || "");
   }, []);
 
   useEffect(() => {
@@ -87,6 +109,42 @@ export function ProfilePage() {
       setError("Failed to synchronize parameters with Cloud Firestore.");
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleSaveKeys = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingKeys(true);
+    setKeysSaveSuccess(false);
+
+    try {
+      const setOrClear = (storageKey: string, val: string) => {
+        if (val.trim()) {
+          localStorage.setItem(storageKey, val.trim());
+        } else {
+          localStorage.removeItem(storageKey);
+        }
+      };
+
+      setOrClear("prahari_gemini_api_key", geminiApiKey);
+      setOrClear("prahari_firebase_api_key", firebaseApiKey);
+      setOrClear("prahari_firebase_auth_domain", firebaseAuthDomain);
+      setOrClear("prahari_firebase_project_id", firebaseProjectId);
+      setOrClear("prahari_firebase_storage_bucket", firebaseStorageBucket);
+      setOrClear("prahari_firebase_messaging_sender_id", firebaseMessagingSenderId);
+      setOrClear("prahari_firebase_app_id", firebaseAppId);
+      setOrClear("prahari_firebase_firestore_database_id", firebaseFirestoreDatabaseId);
+
+      setKeysSaveSuccess(true);
+      setTimeout(() => setKeysSaveSuccess(false), 2500);
+      
+      // Reload page to apply new secure parameters to Firebase configuration
+      window.location.reload();
+    } catch (err) {
+      console.error("Error saving keys locally:", err);
+      setError("Failed to persist secure credentials in sandbox.");
+    } finally {
+      setSavingKeys(false);
     }
   };
 
@@ -353,6 +411,161 @@ export function ProfilePage() {
         </div>
 
       </div>
+
+      {/* 3. DEVELOPER CREDENTIALS SETUP (SECURE KEYS CONFIGURATION) */}
+      <div id="credentials-setup-block" className="bg-white border border-slate-200 p-6 sm:p-8 rounded-sm shadow-xs space-y-6">
+        <div className="border-b border-slate-150 pb-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-950 flex items-center gap-1.5">
+            <Key className="w-4.5 h-4.5 text-slate-700" />
+            <span>Developer Sandbox API Keys</span>
+          </h3>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Configure your custom runtime API keys and Firebase web config overrides. These keys are strictly stored locally in your browser sandbox (localStorage) and never exposed in public repositories or logs.
+          </p>
+        </div>
+
+        <form onSubmit={handleSaveKeys} className="space-y-6">
+          {/* Gemini API Key Block */}
+          <div className="p-4 bg-amber-50/50 rounded-xs border border-amber-200/60 space-y-4">
+            <h4 className="text-xs font-bold text-amber-950 font-mono flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-amber-600 animate-pulse" />
+              <span>Gemini API Key Setup</span>
+            </h4>
+            <div className="space-y-1.5">
+              <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                <span>Gemini API Key</span>
+                <span className="text-rose-500 font-bold">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                If provided, Prahari AI will utilize this key for high-urgency Risk Scoring, Rescue Planning, and plan compression. If blank, standard fallback mode is active.
+              </p>
+            </div>
+          </div>
+
+          {/* Firebase Web Overrides Block */}
+          <div className="space-y-4">
+            <h4 className="text-xs font-bold text-slate-950 font-mono flex items-center gap-1.5">
+              <Database className="w-4 h-4 text-slate-600" />
+              <span>Firebase Web Override Configuration</span>
+            </h4>
+            <p className="text-[10px] text-slate-400">
+              Provide your Firebase project credentials to fully override the client-side database connections. Leave blank to use Prahari's built-in sandbox project.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Firebase API Key</label>
+                <input
+                  type="password"
+                  value={firebaseApiKey}
+                  onChange={(e) => setFirebaseApiKey(e.target.value)}
+                  placeholder="Custom API Key Override"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Auth Domain</label>
+                <input
+                  type="text"
+                  value={firebaseAuthDomain}
+                  onChange={(e) => setFirebaseAuthDomain(e.target.value)}
+                  placeholder="e.g., project-id.firebaseapp.com"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Project ID</label>
+                <input
+                  type="text"
+                  value={firebaseProjectId}
+                  onChange={(e) => setFirebaseProjectId(e.target.value)}
+                  placeholder="e.g., project-id-123"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Storage Bucket</label>
+                <input
+                  type="text"
+                  value={firebaseStorageBucket}
+                  onChange={(e) => setFirebaseStorageBucket(e.target.value)}
+                  placeholder="e.g., project-id.appspot.com"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Messaging Sender ID</label>
+                <input
+                  type="text"
+                  value={firebaseMessagingSenderId}
+                  onChange={(e) => setFirebaseMessagingSenderId(e.target.value)}
+                  placeholder="e.g., 987654321012"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">App ID</label>
+                <input
+                  type="text"
+                  value={firebaseAppId}
+                  onChange={(e) => setFirebaseAppId(e.target.value)}
+                  placeholder="e.g., 1:987654321012:web:abcd1234efgh"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Firestore Database ID (Optional)</label>
+                <input
+                  type="text"
+                  value={firebaseFirestoreDatabaseId}
+                  onChange={(e) => setFirebaseFirestoreDatabaseId(e.target.value)}
+                  placeholder="e.g., (default)"
+                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-slate-150 flex items-center justify-between">
+            {keysSaveSuccess ? (
+              <span className="text-[11px] text-emerald-600 font-mono font-bold flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Keys successfully bound to local sandbox! Reloading...</span>
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-400 font-mono leading-relaxed">
+                Clicking save will register secure credentials inside your local web sandbox.
+              </span>
+            )}
+
+            <Button
+              type="submit"
+              disabled={savingKeys}
+              variant="primary"
+              className="font-mono text-[10px] font-bold tracking-wider uppercase py-2 px-4"
+              icon={<RefreshCw className={`w-3.5 h-3.5 text-white ${savingKeys ? "animate-spin" : ""}`} />}
+            >
+              {savingKeys ? "Registering keys..." : "Register Secure Keys"}
+            </Button>
+          </div>
+        </form>
+      </div>
+
     </div>
   );
 }

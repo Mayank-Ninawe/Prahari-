@@ -1,10 +1,9 @@
 import React from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
-import { Shield, LogOut, ChevronRight, User, AlertCircle, Database, Check, Menu, X } from "lucide-react";
+import { Shield, LogOut, Menu, X } from "lucide-react";
 import { LockedRoute } from "../../config/constants";
 import { useAuth } from "../ui/ProtectedRoute";
 import { APP_NAVIGATION } from "../../config/navigation";
-import { Badge } from "../ui/BaseComponents";
 
 export function AppLayout() {
   const { user, logout } = useAuth();
@@ -17,20 +16,15 @@ export function AppLayout() {
     navigate(LockedRoute.LANDING);
   };
 
-  // Close mobile navigation menu on route change
   React.useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
-  // Find the currently active navigation item to display the page title dynamically
   const activeNav = APP_NAVIGATION.find((item) => item.path === location.pathname);
-  const pageTitle = activeNav ? activeNav.name : "Workspace App";
+  const pageTitle = activeNav ? activeNav.name : "Workspace";
 
   const renderNavLinks = () => (
-    <>
-      <span className="block text-[10px] font-mono font-bold tracking-wider text-slate-400 px-3 mb-2.5 uppercase select-none">
-        Workspace Shells
-      </span>
+    <div className="flex flex-col gap-1">
       {APP_NAVIGATION.map((item) => {
         const isActive = location.pathname === item.path;
         const IconComponent = item.icon;
@@ -40,40 +34,44 @@ export function AppLayout() {
             key={item.path}
             id={`sidebar-item-${item.name.toLowerCase().replace(/\s+/g, "-")}`}
             to={item.path}
-            className={`flex items-center justify-between px-3 py-2.5 rounded-xs text-xs font-medium transition-all group relative ${
+            className={`flex items-center justify-between pl-3.5 pr-3 py-2.5 rounded-sm text-sm transition-all group relative ${
               isActive
-                ? "bg-slate-900 text-white shadow-xs"
-                : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                ? "bg-[#01696f]/6 text-[#28251d] font-semibold"
+                : "text-[#7a7974] hover:bg-[#28251d]/4 hover:text-[#28251d]"
             }`}
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <IconComponent
                 className={`w-4 h-4 shrink-0 transition-colors ${
-                  isActive ? "text-white" : "text-slate-400 group-hover:text-slate-600"
+                  isActive
+                    ? "text-[#01696f]"
+                    : "text-[#a19d96] group-hover:text-[#5f5b53]"
                 }`}
               />
               <span className="truncate">{item.name}</span>
             </div>
+
             {isActive && (
-              <span className="w-1 h-3.5 bg-amber-500 rounded-full absolute right-0 top-1/2 -translate-y-1/2"></span>
+              <span className="w-0.5 h-4 bg-[#01696f] rounded-full absolute left-0 top-1/2 -translate-y-1/2"></span>
             )}
           </Link>
         );
       })}
-    </>
+    </div>
   );
 
   const renderSidebarFooter = () => (
-    <div className="p-4 border-t border-slate-100 bg-slate-50/50">
-      <div className="flex items-center gap-3 px-2 py-2 mb-3.5 bg-white border border-slate-150 rounded-xs">
-        <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+    <div className="p-4 border-t border-[#28251d]/8 mt-auto flex flex-col gap-3 bg-transparent">
+      <div className="flex items-center gap-2.5 px-1 py-1">
+        <div className="w-8 h-8 rounded-full bg-[#28251d] text-[#f9f8f5] flex items-center justify-center text-xs font-semibold shrink-0">
           {user?.name?.[0]?.toUpperCase() || "D"}
         </div>
-        <div className="truncate text-left">
-          <p className="text-xs font-bold text-slate-900 truncate leading-tight">
-            {user?.name || "Demo Workspace User"}
+
+        <div className="truncate text-left min-w-0">
+          <p className="text-xs font-semibold text-[#28251d] truncate leading-tight">
+            {user?.name || "Demo User"}
           </p>
-          <p className="text-[10px] text-slate-400 font-mono truncate leading-none mt-1">
+          <p className="text-[11px] text-[#7a7974] truncate leading-none mt-0.5">
             {user?.email || "demo@prahari.ai"}
           </p>
         </div>
@@ -82,42 +80,53 @@ export function AppLayout() {
       <button
         id="sidebar-logout-button"
         onClick={handleLogout}
-        className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-slate-200 hover:border-slate-300 hover:bg-white text-xs font-medium rounded-xs text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+        className="flex items-center gap-2 px-1 py-1 text-[11px] font-medium text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer group w-fit"
       >
-        <LogOut className="w-3.5 h-3.5 shrink-0" />
-        <span>Exit Workspace</span>
+        <LogOut className="w-3.5 h-3.5 shrink-0 text-[#a19d96] group-hover:text-[#5f5b53] transition-colors" />
+        <span>Sign out</span>
       </button>
     </div>
   );
 
   return (
-    <div id="app-layout-root" className="min-h-screen flex bg-slate-50 text-slate-900 font-sans animate-fade-in relative">
-      
+    <div
+      id="app-layout-root"
+      className="min-h-screen flex bg-[#f9f8f5] text-[#28251d] font-sans relative animate-fade-in"
+    >
       {/* =========================================================================
           1. DESKTOP SIDEBAR NAVIGATION
           ========================================================================= */}
-      <aside id="app-sidebar" className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shrink-0 sticky top-0 h-screen">
-        
-        {/* Sidebar Header Logo */}
-        <div className="h-16 px-6 border-b border-slate-100 flex items-center justify-between shrink-0">
-          <Link to={LockedRoute.LANDING} className="flex items-center gap-2.5 focus:outline-hidden group">
-            <div className="w-8 h-8 bg-slate-900 rounded-sm flex items-center justify-center group-hover:bg-slate-800 transition-colors">
-              <Shield className="w-4.5 h-4.5 text-white" />
+      <aside
+        id="app-sidebar"
+        className="w-60 bg-[#f5f2ed] border-r border-[#28251d]/8 hidden md:flex flex-col shrink-0 sticky top-0 h-screen"
+      >
+        <div className="h-14 px-5 border-b border-[#28251d]/8 flex items-center justify-between shrink-0">
+          <Link
+            to={LockedRoute.LANDING}
+            className="flex items-center gap-2.5 focus:outline-none group"
+          >
+            <div className="w-7 h-7 bg-[#28251d] rounded-sm flex items-center justify-center group-hover:bg-[#005156] transition-colors">
+              <Shield className="w-4 h-4 text-[#f9f8f5]" />
             </div>
+
             <div className="flex flex-col">
-              <span className="font-semibold text-sm tracking-tight text-slate-900">Prahari AI</span>
-              <span className="text-[8px] text-slate-400 font-mono tracking-wider leading-none">RESCUE WRAPPER</span>
+              <span className="font-semibold text-xs tracking-wide text-[#28251d] uppercase">
+                Prahari AI
+              </span>
+              <span className="text-[10px] text-[#7a7974] leading-none mt-0.5">
+                Rescue workspace
+              </span>
             </div>
           </Link>
-          <Badge urgency="low">APP</Badge>
         </div>
 
-        {/* Dynamic Navigation Links */}
-        <nav id="app-sidebar-nav" className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+        <nav
+          id="app-sidebar-nav"
+          className="flex-1 px-3 py-5 space-y-1 overflow-y-auto"
+        >
           {renderNavLinks()}
         </nav>
 
-        {/* User Identity Segment & Logout Button */}
         {renderSidebarFooter()}
       </aside>
 
@@ -125,39 +134,52 @@ export function AppLayout() {
           2. MOBILE SLIDEOUT DRAWER NAVIGATION
           ========================================================================= */}
       {mobileMenuOpen && (
-        <div 
+        <div
           id="app-mobile-nav-backdrop"
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 md:hidden animate-fade-in"
+          className="fixed inset-0 bg-[#28251d]/30 backdrop-blur-xs z-40 md:hidden transition-opacity"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
 
-      <aside 
-        id="app-mobile-sidebar" 
-        className={`fixed inset-y-0 left-0 w-72 bg-white shadow-xl border-r border-slate-200 z-50 flex flex-col transition-transform duration-300 md:hidden ${
+      <aside
+        id="app-mobile-sidebar"
+        className={`fixed inset-y-0 left-0 w-64 bg-[#f5f2ed] shadow-xl border-r border-[#28251d]/8 z-50 flex flex-col transition-transform duration-300 md:hidden ${
           mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="h-16 px-6 border-b border-slate-100 flex items-center justify-between shrink-0">
-          <Link to={LockedRoute.LANDING} className="flex items-center gap-2.5 focus:outline-hidden group">
-            <div className="w-8 h-8 bg-slate-900 rounded-sm flex items-center justify-center">
-              <Shield className="w-4.5 h-4.5 text-white" />
+        <div className="h-14 px-5 border-b border-[#28251d]/8 flex items-center justify-between shrink-0">
+          <Link
+            to={LockedRoute.LANDING}
+            className="flex items-center gap-2.5 focus:outline-none group"
+          >
+            <div className="w-7 h-7 bg-[#28251d] rounded-sm flex items-center justify-center">
+              <Shield className="w-4 h-4 text-[#f9f8f5]" />
             </div>
+
             <div className="flex flex-col">
-              <span className="font-semibold text-sm tracking-tight text-slate-900">Prahari AI</span>
-              <span className="text-[8px] text-slate-400 font-mono tracking-wider leading-none">RESCUE WRAPPER</span>
+              <span className="font-semibold text-xs tracking-wide text-[#28251d] uppercase">
+                Prahari AI
+              </span>
+              <span className="text-[10px] text-[#7a7974] leading-none mt-0.5">
+                Rescue workspace
+              </span>
             </div>
           </Link>
-          <button 
+
+          <button
             id="mobile-close-sidebar-btn"
             onClick={() => setMobileMenuOpen(false)}
-            className="p-1.5 hover:bg-slate-100 rounded-sm text-slate-500 hover:text-slate-900 cursor-pointer"
+            className="p-1 hover:bg-[#28251d]/5 rounded-sm text-[#7a7974] hover:text-[#28251d] cursor-pointer"
+            aria-label="Close navigation menu"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <nav id="app-mobile-sidebar-nav" className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+        <nav
+          id="app-mobile-sidebar-nav"
+          className="flex-1 px-3 py-5 space-y-1 overflow-y-auto"
+        >
           {renderNavLinks()}
         </nav>
 
@@ -168,48 +190,48 @@ export function AppLayout() {
           3. MAIN APP CONTENT CONTAINER
           ========================================================================= */}
       <div id="app-content-wrapper" className="flex-1 flex flex-col min-w-0">
-        
-        {/* Main Header / Topbar */}
-        <header id="app-topbar" className="h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between sticky top-0 z-30 font-sans">
-          
-          {/* Mobile hamburger menu & Page Title */}
+        <header
+          id="app-topbar"
+          className="h-14 bg-[#f9f8f5] border-b border-[#28251d]/8 px-4 sm:px-8 flex items-center justify-between sticky top-0 z-30"
+        >
           <div className="flex items-center gap-3">
             <button
               id="mobile-hamburger-btn"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-1.5 hover:bg-slate-100 rounded-sm text-slate-500 hover:text-slate-900 md:hidden cursor-pointer shrink-0"
+              className="p-1 hover:bg-[#28251d]/5 rounded-sm text-[#7a7974] hover:text-[#28251d] md:hidden cursor-pointer shrink-0"
               aria-label="Toggle navigation menu"
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-4.5 h-4.5" />
             </button>
 
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className="text-[10px] sm:text-xs text-slate-400 font-mono tracking-wider whitespace-nowrap">PRAHARI CORE</span>
-              <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
-              <h1 className="text-[10px] sm:text-xs font-bold text-slate-900 uppercase font-mono tracking-wider truncate max-w-[120px] sm:max-w-none">{pageTitle}</h1>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[11px] text-[#7a7974] tracking-wide">
+                Workspace
+              </span>
+              <span className="text-[#b8b3ab] text-xs">/</span>
+              <h1 className="text-sm font-semibold text-[#28251d] truncate max-w-[180px] sm:max-w-none">
+                {pageTitle}
+              </h1>
             </div>
           </div>
 
-          {/* Quick Info Alerts & Integration badges */}
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-sm text-[10px] font-mono text-emerald-800 font-semibold select-none">
-              <Database className="w-3 h-3 text-emerald-600" />
-              <span>SYNC: FIRESTORE ACTIVE</span>
-            </div>
-            <div className="flex items-center gap-2 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-sm text-[10px] font-mono text-amber-500 select-none">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-              <span className="hidden xs:inline">CORE SHELL V4</span>
-              <span className="xs:hidden">V4</span>
+          <div className="flex items-center gap-4 shrink-0">
+            <div className="flex items-center gap-2 select-none">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-[11px] text-[#7a7974]">System ready</span>
             </div>
           </div>
         </header>
 
-        {/* Outer Page Container with fluid grid control */}
-        <main id="app-page-container" className="flex-1 p-4 sm:p-8 overflow-y-auto max-w-7xl w-full mx-auto">
+        <main
+          id="app-page-container"
+          className="flex-1 p-4 sm:p-8 overflow-y-auto max-w-7xl w-full mx-auto"
+        >
           <Outlet />
         </main>
       </div>
     </div>
   );
 }
+
 export default AppLayout;

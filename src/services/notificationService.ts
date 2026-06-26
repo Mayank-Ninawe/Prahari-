@@ -26,6 +26,19 @@ export interface NotificationDocument {
   createdAt: any;
 }
 
+function isOfflineError(error: any): boolean {
+  if (!db) return true;
+  if (!error) return false;
+  const msg = error.message || String(error);
+  return (
+    msg.includes("offline") || 
+    msg.includes("client is offline") || 
+    msg.includes("Failed to get document") ||
+    msg.includes("Failed to query") ||
+    msg.includes("uninitialized")
+  );
+}
+
 export const NotificationService = {
   /**
    * Check if web notifications are supported in the current browser environment
@@ -85,11 +98,36 @@ export const NotificationService = {
     const notificationDoc: NotificationDocument = {
       ...data,
       notificationId,
-      createdAt: serverTimestamp()
+      createdAt: new Date().toISOString()
     };
 
-    await setDoc(notificationRef, notificationDoc);
-    return notificationId;
+    try {
+      const firestoreDoc = {
+        ...notificationDoc,
+        createdAt: serverTimestamp()
+      };
+      await setDoc(notificationRef, firestoreDoc);
+      
+      if (typeof window !== "undefined") {
+        const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+        const cached: NotificationDocument[] = cachedStr ? JSON.parse(cachedStr) : [];
+        cached.unshift(notificationDoc);
+        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(cached));
+      }
+      return notificationId;
+    } catch (error) {
+      if (isOfflineError(error)) {
+        console.warn("Firestore offline - falling back to localStorage for saveNotificationRecord");
+        if (typeof window !== "undefined") {
+          const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+          const cached: NotificationDocument[] = cachedStr ? JSON.parse(cachedStr) : [];
+          cached.unshift(notificationDoc);
+          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(cached));
+        }
+        return notificationId;
+      }
+      throw error;
+    }
   },
 
   /**
@@ -106,21 +144,50 @@ export const NotificationService = {
         const item = d.data() as NotificationDocument;
         notifications.push(item);
       });
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(notifications));
+      }
       return notifications;
     } catch (err) {
-      console.warn("Failed to query notifications sorted by createdAt. Fetching unsorted fallback:", err);
-      // Fallback in case of index delay
-      const snap = await getDocs(notificationsCol);
-      const notifications: NotificationDocument[] = [];
-      snap.forEach((d) => {
-        notifications.push(d.data() as NotificationDocument);
-      });
-      // Sort in memory as fallback
-      return notifications.sort((a, b) => {
-        const timeA = a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : 0;
-        const timeB = b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : 0;
-        return timeB - timeA;
-      }).slice(0, maxCount);
+      if (isOfflineError(err)) {
+        console.warn("Firestore offline - falling back to localStorage for getUserNotifications");
+        if (typeof window !== "undefined") {
+          const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+          if (cachedStr) {
+            return JSON.parse(cachedStr).slice(0, maxCount);
+          }
+        }
+        return [];
+      }
+      
+      try {
+        console.warn("Failed to query notifications sorted by createdAt. Fetching unsorted fallback:", err);
+        const snap = await getDocs(notificationsCol);
+        const notifications: NotificationDocument[] = [];
+        snap.forEach((d) => {
+          notifications.push(d.data() as NotificationDocument);
+        });
+        const sorted = notifications.sort((a, b) => {
+          const timeA = a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : 0;
+          const timeB = b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : 0;
+          return timeB - timeA;
+        }).slice(0, maxCount);
+        if (typeof window !== "undefined") {
+          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(sorted));
+        }
+        return sorted;
+      } catch (err2) {
+        if (isOfflineError(err2)) {
+          if (typeof window !== "undefined") {
+            const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+            if (cachedStr) {
+              return JSON.parse(cachedStr).slice(0, maxCount);
+            }
+          }
+          return [];
+        }
+        throw err2;
+      }
     }
   },
 
@@ -129,9 +196,33 @@ export const NotificationService = {
    */
   async markAsRead(uid: string, notificationId: string): Promise<void> {
     const notificationRef = doc(db, "users", uid, "notifications", notificationId);
-    await updateDoc(notificationRef, {
-      read: true
-    });
+    try {
+      await updateDoc(notificationRef, {
+        read: true
+      });
+      if (typeof window !== "undefined") {
+        const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+        if (cachedStr) {
+          const cached: NotificationDocument[] = JSON.parse(cachedStr);
+          const updated = cached.map(n => n.notificationId === notificationId ? { ...n, read: true } : n);
+          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(updated));
+        }
+      }
+    } catch (error) {
+      if (isOfflineError(error)) {
+        console.warn("Firestore offline - falling back to localStorage for markAsRead");
+        if (typeof window !== "undefined") {
+          const cachedStr = localStorage.getItem(`prahari_notifications_${uid}`);
+          if (cachedStr) {
+            const cached: NotificationDocument[] = JSON.parse(cachedStr);
+            const updated = cached.map(n => n.notificationId === notificationId ? { ...n, read: true } : n);
+            localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify(updated));
+          }
+        }
+        return;
+      }
+      throw error;
+    }
   },
 
   /**
@@ -156,7 +247,7 @@ export const NotificationService = {
 
     // Load current notification records to avoid duplicates
     const existingNotifications = await this.getUserNotifications(uid, 100);
-    const triggeredNotifications: NotificationDocument[] = [];
+    const newRecordsToSave: Omit<NotificationDocument, "notificationId" | "createdAt">[] = [];
 
     for (const task of tasks) {
       // 1. High Risk Alert
@@ -168,7 +259,7 @@ export const NotificationService = {
           const title = `CRITICAL RISK DETECTED: "${task.title}"`;
           const body = `Prahari guard assessed a risk score of ${task.riskScore} (${task.riskLevel.toUpperCase()}) due to: ${task.riskReasonSummary || "Insufficient safety margin."}`;
           
-          await this.saveNotificationRecord(uid, {
+          newRecordsToSave.push({
             type: "high_risk",
             title,
             body,
@@ -194,7 +285,7 @@ export const NotificationService = {
           const title = `DEPLOYMENT SUGGESTED: "${task.title}"`;
           const body = `A personalized rescue path has been calculated by Gemini, but has not been activated. Click to activate now and start milestone tracking.`;
           
-          await this.saveNotificationRecord(uid, {
+          newRecordsToSave.push({
             type: "not_activated",
             title,
             body,
@@ -230,7 +321,7 @@ export const NotificationService = {
             const title = `COMPRESSION SUGGESTED: "${task.title}"`;
             const body = `Deadline is only ${Math.round(remainingMinutes)} mins away with ${pendingStepsCount} steps pending. Run Prahari AI compression to prune scope instantly.`;
             
-            await this.saveNotificationRecord(uid, {
+            newRecordsToSave.push({
               type: "compression_recommended",
               title,
               body,
@@ -249,7 +340,23 @@ export const NotificationService = {
       }
     }
 
-    // Return the fresh notification history
-    return await this.getUserNotifications(uid, 50);
+    if (newRecordsToSave.length > 0) {
+      // Save all in parallel
+      const savedIds = await Promise.all(
+        newRecordsToSave.map(record => this.saveNotificationRecord(uid, record))
+      );
+
+      // Create full objects for local updates, sorted most-recent first
+      const newNotifications: NotificationDocument[] = newRecordsToSave.map((record, index) => ({
+        ...record,
+        notificationId: savedIds[index],
+        createdAt: new Date().toISOString()
+      }));
+
+      const combined = [...newNotifications, ...existingNotifications];
+      return combined.slice(0, 50);
+    }
+
+    return existingNotifications.slice(0, 50);
   }
 };

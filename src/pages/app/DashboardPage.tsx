@@ -1,19 +1,15 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Timestamp } from "firebase/firestore";
-import { 
-  ShieldAlert, 
-  CheckCircle2, 
-  TrendingUp, 
-  Sparkles, 
-  FileText, 
-  ArrowRight, 
-  Zap, 
-  Target, 
-  Hourglass, 
-  ShieldCheck, 
-  Clock, 
-  Activity, 
+import {
+  ShieldAlert,
+  Sparkles,
+  ArrowRight,
+  Target,
+  Hourglass,
+  ShieldCheck,
+  Clock,
+  Activity,
   ChevronRight,
   ArrowUpRight,
   Sliders,
@@ -21,14 +17,9 @@ import {
   Plus,
   Trash2,
   X,
-  HelpCircle,
   Bell,
-  AlertTriangle,
-  CheckCheck,
-  Eye
 } from "lucide-react";
 import { LockedRoute } from "../../config/constants";
-import { Card, Badge, Button } from "../../components/ui/BaseComponents";
 import { useAuth } from "../../components/ui/ProtectedRoute";
 import { FirebaseService, TaskDocument } from "../../services/firebaseService";
 import { GeminiService } from "../../services/gemini";
@@ -37,12 +28,12 @@ import { DemoService } from "../../services/demoService";
 
 export function DashboardPage() {
   const { firebaseUser, userDoc } = useAuth();
-  
+  const navigate = useNavigate();
+
   const [tasks, setTasks] = React.useState<TaskDocument[]>([]);
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string>("");
-  
-  // Modal & Form States
+
   const [isFormOpen, setIsFormOpen] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -50,13 +41,12 @@ export function DashboardPage() {
   const [deadline, setDeadline] = React.useState("");
   const [estimatedMinutes, setEstimatedMinutes] = React.useState(120);
   const [priority, setPriority] = React.useState("high");
+  const [taskToDelete, setTaskToDelete] = React.useState<string | null>(null);
 
-  // Demo Sandbox States
-  const [isDemoSandboxOpen, setIsDemoSandboxOpen] = React.useState(true);
+  const [isDemoSandboxOpen, setIsDemoSandboxOpen] = React.useState(false);
   const [demoActionLoading, setDemoActionLoading] = React.useState(false);
   const [demoMessage, setDemoMessage] = React.useState("");
 
-  // Notifications state
   const [notifications, setNotifications] = React.useState<NotificationDocument[]>([]);
   const [loadingNotifications, setLoadingNotifications] = React.useState(false);
   const [nudgeClosed, setNudgeClosed] = React.useState(false);
@@ -70,7 +60,11 @@ export function DashboardPage() {
     try {
       setLoadingNotifications(true);
       const isPushPreferred = userDoc?.notificationPreferences?.webPush || false;
-      const list = await NotificationService.evaluateEscalationTriggers(uid, currentTasks, isPushPreferred);
+      const list = await NotificationService.evaluateEscalationTriggers(
+        uid,
+        currentTasks,
+        isPushPreferred
+      );
       setNotifications(list);
     } catch (err) {
       console.warn("Failed to load notifications:", err);
@@ -83,8 +77,10 @@ export function DashboardPage() {
     if (!firebaseUser) return;
     try {
       await NotificationService.markAsRead(firebaseUser.uid, notificationId);
-      setNotifications(prev => 
-        prev.map(n => n.notificationId === notificationId ? { ...n, read: true } : n)
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n.notificationId === notificationId ? { ...n, read: true } : n
+        )
       );
     } catch (err) {
       console.error("Failed to mark notification as read:", err);
@@ -95,7 +91,7 @@ export function DashboardPage() {
     if (!firebaseUser || notifications.length === 0) return;
     try {
       await NotificationService.markAllAsRead(firebaseUser.uid, notifications);
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch (err) {
       console.error("Failed to mark all as read:", err);
     }
@@ -106,13 +102,12 @@ export function DashboardPage() {
     setPermissionState(result);
     if (result === "granted") {
       NotificationService.sendLocalBrowserNotification(
-        "Prahari AI Web Push Activated",
-        "You will now receive high-priority crisis escalation warnings in real-time."
+        "Prahari AI Alerts Enabled",
+        "You’ll now receive important deadline alerts in real time."
       );
     }
   };
 
-  // Load tasks on mount or when user changes
   const loadTasks = async () => {
     if (!firebaseUser) return;
     try {
@@ -120,9 +115,10 @@ export function DashboardPage() {
       setError("");
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
       setTasks(fetchedTasks);
-      await loadNotifications(firebaseUser.uid, fetchedTasks);
+      // Load notifications in background so tasks render immediately
+      loadNotifications(firebaseUser.uid, fetchedTasks);
     } catch (err: any) {
-      setError("Failed to fetch workspace targets from Firestore.");
+      setError("We couldn’t load your tasks right now. Please refresh and try again.");
       console.error(err);
     } finally {
       setLoading(false);
@@ -135,12 +131,12 @@ export function DashboardPage() {
       setDemoActionLoading(true);
       setDemoMessage("");
       await DemoService.seedDemoWorkspace(firebaseUser.uid);
-      setDemoMessage("Gears locked. Real-time Firestore sandbox populated with 3 live crisis scenarios.");
+      setDemoMessage("Demo tasks loaded successfully.");
       await loadTasks();
       setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
       console.error("Demo seeding failed:", err);
-      setError("Failed to seed demo workspace in Firestore.");
+      setError("We couldn’t load the demo tasks right now.");
     } finally {
       setDemoActionLoading(false);
     }
@@ -152,12 +148,12 @@ export function DashboardPage() {
       setDemoActionLoading(true);
       setDemoMessage("");
       await DemoService.resetToEmptyWorkspace(firebaseUser.uid);
-      setDemoMessage("Pristine restore: all workspace targets cleared. Empty-state active.");
+      setDemoMessage("Demo tasks cleared.");
       await loadTasks();
       setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
       console.error("Demo reset failed:", err);
-      setError("Failed to purge demo workspace in Firestore.");
+      setError("We couldn’t clear the demo tasks right now.");
     } finally {
       setDemoActionLoading(false);
     }
@@ -174,997 +170,1013 @@ export function DashboardPage() {
     try {
       setAssessingTaskId(task.taskId);
       setError("");
-      
-      const deadlineStr = task.deadline instanceof Date 
-        ? task.deadline.toISOString()
-        : (task.deadline as any)?.toDate?.()?.toISOString() || String(task.deadline);
 
-      const assessmentResult = await GeminiService.assessTaskRisk({
-        title: task.title,
-        description: task.description,
-        category: task.category,
-        deadline: deadlineStr,
-        estimatedMinutes: task.estimatedMinutes,
-        priority: task.priority
-      }, {
-        workStyle: userDoc?.workStyle || "normal",
-        aggressiveness: userDoc?.demoModeEnabled ? "high" : "medium",
-        timezone: userDoc?.timezone || "Asia/Kolkata"
-      });
+      const deadlineStr =
+        task.deadline instanceof Date
+          ? task.deadline.toISOString()
+          : (task.deadline as any)?.toDate?.()?.toISOString() || String(task.deadline);
+
+      const assessmentResult = await GeminiService.assessTaskRisk(
+        {
+          title: task.title,
+          description: task.description,
+          category: task.category,
+          deadline: deadlineStr,
+          estimatedMinutes: task.estimatedMinutes,
+          priority: task.priority,
+        },
+        {
+          workStyle: userDoc?.workStyle || "normal",
+          aggressiveness: userDoc?.demoModeEnabled ? "high" : "medium",
+          timezone: userDoc?.timezone || "Asia/Kolkata",
+        }
+      );
 
       await FirebaseService.updateTask(firebaseUser.uid, task.taskId, {
         riskScore: assessmentResult.riskScore,
         riskLevel: assessmentResult.riskLevel,
         riskReasonSummary: assessmentResult.riskReasonSummary,
         aiLastEvaluatedAt: new Date(),
-        nextActionLabel: assessmentResult.recommendedMode === "compress" ? "Needs Compression" : assessmentResult.recommendedMode === "rescue" ? "Needs Rescue Plan" : "Maintain Scope"
+        nextActionLabel:
+          assessmentResult.recommendedMode === "compress"
+            ? "Needs compression"
+            : assessmentResult.recommendedMode === "rescue"
+            ? "Needs rescue plan"
+            : "Stay on track",
       });
 
       await loadTasks();
     } catch (err: any) {
       console.error("Manual reassessment failed:", err);
-      setError("AI risk assessment failed. Please ensure your Gemini API key is active.");
+      setError("AI reassessment failed. Please check your Gemini setup and try again.");
     } finally {
       setAssessingTaskId(null);
     }
   };
 
-  // Form submission handler
   const handleSubmitTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!firebaseUser) return;
+
     if (!title || !deadline) {
-      alert("Please fill in title and deadline.");
+      setError("Please fill in the task title and due date.");
       return;
     }
 
+    // Capture current values for background risk assessment before clearing the form
+    const currentTitle = title;
+    const currentDescription = description;
+    const currentCategory = category;
+    const currentDeadline = deadline;
+    const currentEstimatedMinutes = Number(estimatedMinutes);
+    const currentPriority = priority;
+
     try {
       setLoading(true);
-      const taskId = await FirebaseService.createTask(firebaseUser.uid, {
-        title,
-        description,
-        category,
-        deadline: new Date(deadline),
-        estimatedMinutes: Number(estimatedMinutes),
-        priority
-      });
-      
-      // Auto-trigger risk assessment on creation
-      try {
-        const assessmentResult = await GeminiService.assessTaskRisk({
-          title,
-          description,
-          category,
-          deadline: new Date(deadline).toISOString(),
-          estimatedMinutes: Number(estimatedMinutes),
-          priority
-        }, {
-          workStyle: userDoc?.workStyle || "normal",
-          aggressiveness: userDoc?.demoModeEnabled ? "high" : "medium",
-          timezone: userDoc?.timezone || "Asia/Kolkata"
-        });
+      setError("");
 
-        await FirebaseService.updateTask(firebaseUser.uid, taskId, {
-          riskScore: assessmentResult.riskScore,
-          riskLevel: assessmentResult.riskLevel,
-          riskReasonSummary: assessmentResult.riskReasonSummary,
-          aiLastEvaluatedAt: new Date(),
-          nextActionLabel: assessmentResult.recommendedMode === "compress" ? "Needs Compression" : assessmentResult.recommendedMode === "rescue" ? "Needs Rescue Plan" : "Maintain Scope"
-        });
-      } catch (aiErr) {
-        console.error("AI risk assessment failed on task creation:", aiErr);
-      }
-      
-      // Reset form and close modal
+      // 1. Instantly save the task to Firebase
+      const taskId = await FirebaseService.createTask(firebaseUser.uid, {
+        title: currentTitle,
+        description: currentDescription,
+        category: currentCategory,
+        deadline: new Date(currentDeadline),
+        estimatedMinutes: currentEstimatedMinutes,
+        priority: currentPriority,
+      });
+
+      // 2. Immediately close the form & reset states to go back
+      setIsFormOpen(false);
       setTitle("");
       setDescription("");
       setCategory("Compliance");
       setDeadline("");
       setEstimatedMinutes(120);
       setPriority("high");
-      setIsFormOpen(false);
-      
-      // Reload list
+
+      // 3. Immediately show the new task by fetching from Firebase
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
       setTasks(fetchedTasks);
-    } catch (err) {
-      console.error("Error creating target:", err);
-    } finally {
+      setLoading(false); // Stop loading indicator early so page is interactive
+
+      // 4. Run AI risk assessment in the background to avoid any blocking/waiting
+      (async () => {
+        try {
+          const assessmentResult = await GeminiService.assessTaskRisk(
+            {
+              title: currentTitle,
+              description: currentDescription,
+              category: currentCategory,
+              deadline: new Date(currentDeadline).toISOString(),
+              estimatedMinutes: currentEstimatedMinutes,
+              priority: currentPriority,
+            },
+            {
+              workStyle: userDoc?.workStyle || "normal",
+              aggressiveness: userDoc?.demoModeEnabled ? "high" : "medium",
+              timezone: userDoc?.timezone || "Asia/Kolkata",
+            }
+          );
+
+          await FirebaseService.updateTask(firebaseUser.uid, taskId, {
+            riskScore: assessmentResult.riskScore,
+            riskLevel: assessmentResult.riskLevel,
+            riskReasonSummary: assessmentResult.riskReasonSummary,
+            aiLastEvaluatedAt: new Date(),
+            nextActionLabel:
+              assessmentResult.recommendedMode === "compress"
+                ? "Needs compression"
+                : assessmentResult.recommendedMode === "rescue"
+                ? "Needs rescue plan"
+                : "Stay on track",
+          });
+
+          // Silently refresh the list when background evaluation finishes
+          const updatedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
+          setTasks(updatedTasks);
+        } catch (aiErr) {
+          console.error("AI risk assessment failed in background on task creation:", aiErr);
+        }
+      })();
+
+    } catch (err: any) {
+      console.error("Error creating task:", err);
+      setError(err?.message || "We couldn’t save this task. Please try again.");
       setLoading(false);
     }
   };
 
-  // Delete task handler
   const handleDeleteTask = async (taskId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!firebaseUser) return;
-    
-    if (confirm("Are you sure you want to delete this workspace target?")) {
-      try {
-        setLoading(true);
-        await FirebaseService.deleteTask(firebaseUser.uid, taskId);
-        const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-        setTasks(fetchedTasks);
-      } catch (err) {
-        console.error("Error deleting target:", err);
-      } finally {
-        setLoading(false);
-      }
+    setTaskToDelete(taskId);
+  };
+
+  const confirmDeleteTask = async () => {
+    if (!taskToDelete || !firebaseUser) return;
+    try {
+      setLoading(true);
+      setError("");
+      await FirebaseService.deleteTask(firebaseUser.uid, taskToDelete);
+      const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
+      setTasks(fetchedTasks);
+    } catch (err: any) {
+      console.error("Error deleting task:", err);
+      setError("Failed to delete task. Please try again.");
+    } finally {
+      setTaskToDelete(null);
+      setLoading(false);
     }
   };
 
-  // Load demo targets
   const handleLoadDemoScenarios = async () => {
     if (!firebaseUser) return;
     try {
       setLoading(true);
-      
-      await FirebaseService.createTask(firebaseUser.uid, {
-        title: "GDPR Compliance Verification",
-        description: "Verify database schema upgrades comply with GDPR regulations. Exclude secondary telemetry.",
-        category: "Compliance",
-        deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-        estimatedMinutes: 720,
-        priority: "critical"
-      });
-
-      await FirebaseService.createTask(firebaseUser.uid, {
-        title: "Q3 Analytics API Sync Gateway",
-        description: "Deploy analytics endpoints to synchronize metrics, deferred tracing payloads.",
-        category: "Integration",
-        deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        estimatedMinutes: 480,
-        priority: "high"
-      });
-
-      await FirebaseService.createTask(firebaseUser.uid, {
-        title: "User Workspace Onboarding Revamp",
-        description: "Simplify auth screens and loading states. Smooth UX transition.",
-        category: "Frontend",
-        deadline: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000),
-        estimatedMinutes: 300,
-        priority: "low"
-      });
-
+      await DemoService.seedDemoWorkspace(firebaseUser.uid);
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
       setTasks(fetchedTasks);
     } catch (err) {
-      console.error("Error seeding demo targets:", err);
+      console.error("Error seeding demo tasks:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Derived dashboard analytics
-  const criticalTasksCount = tasks.filter(t => t.priority === "critical" || t.priority === "high").length;
-  const totalEstimatedMinutes = tasks.reduce((acc, t) => acc + (t.estimatedMinutes || 0), 0);
+  const criticalTasksCount = tasks.filter(
+    (t) => t.priority === "critical" || t.priority === "high"
+  ).length;
+
+  const totalEstimatedMinutes = tasks.reduce(
+    (acc, t) => acc + (t.estimatedMinutes || 0),
+    0
+  );
   const totalEstimatedHours = Math.ceil(totalEstimatedMinutes / 60);
 
-  // Spotlight target
-  const spotlightTask = tasks.find(t => t.priority === "critical") || 
-                        tasks.find(t => t.priority === "high") || 
-                        tasks[0];
+  const stabilizedCount = tasks.filter(
+    (t) => t.status === "completed" || t.status === "mitigated"
+  ).length;
+
+  const spotlightTask =
+    tasks.find((t) => t.priority === "critical") ||
+    tasks.find((t) => t.priority === "high") ||
+    tasks[0];
+
+  const formatDeadlineDate = (deadlineVal: any) => {
+    if (!deadlineVal) return "";
+    try {
+      if (deadlineVal instanceof Date) {
+        return deadlineVal.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+      }
+      if (typeof deadlineVal.toDate === "function") {
+        return deadlineVal.toDate().toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+      }
+      return new Date(deadlineVal).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    } catch (err) {
+      return String(deadlineVal);
+    }
+  };
+
+  const getFriendlyNotificationType = (type: string) => {
+    const map: Record<string, string> = {
+      deadline_risk: "Deadline risk",
+      overload_warning: "Workload warning",
+      plan_update: "Plan updated",
+      rescue_needed: "Rescue needed",
+      priority_shift: "Priority changed",
+    };
+    return map[type] || type.replace(/_/g, " ");
+  };
 
   return (
-    <div id="dashboard-page-root" className="space-y-8 font-sans text-slate-900 animate-fade-in text-left">
-      
-      {/* PAGE HEADER */}
-      <div id="dashboard-header" className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-2 border-b border-slate-200">
+    <div
+      id="dashboard-page-root"
+      className="space-y-10 font-sans text-[#28251d] animate-fade-in text-left pb-16"
+    >
+      {/* =========================================================================
+          ZONE 1: HEADER
+          ========================================================================= */}
+      <div
+        id="dashboard-header"
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#28251d]/12"
+      >
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">Operational Command Center</h2>
-          <p className="text-xs text-slate-500">
-            Milestones stored in real Firestore collections for user <span className="font-mono text-slate-700 bg-slate-100 px-1 rounded-sm">{userDoc?.fullName || firebaseUser?.email}</span>.
+          <h2 className="text-2xl font-semibold tracking-tight text-[#28251d] font-serif">
+            Deadline overview
+          </h2>
+          <p className="text-sm text-[#7a7974]">
+            Your tasks and rescue plans are ready for{" "}
+            <span className="font-medium text-[#28251d]">
+              {userDoc?.fullName || firebaseUser?.email}
+            </span>
           </p>
         </div>
-        <div className="flex items-center gap-2 self-start md:self-center">
-          <Button 
-            id="create-task-btn" 
-            onClick={() => setIsFormOpen(true)}
-            size="sm"
-            variant="primary"
-            icon={<Plus className="w-3.5 h-3.5 text-white" />}
-          >
-            Monitor New Target
-          </Button>
-        </div>
-      </div>
-      
-      {/* HACKATHON JUDGE & DEMO SANDBOX SUITE */}
-      {isDemoSandboxOpen ? (
-        <Card className="border-2 border-slate-900 bg-slate-50 p-6 rounded-sm space-y-6 text-left relative overflow-hidden shadow-md">
-          {/* Accent decoration strip */}
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-400 via-rose-500 to-indigo-600"></div>
-          
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 bg-slate-900 text-white font-mono text-[9px] font-bold uppercase tracking-wider rounded-sm">
-                  Evaluation Suite
-                </span>
-                <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 border border-indigo-200 font-mono text-[9px] font-bold uppercase tracking-wider rounded-sm animate-pulse">
-                  Ready
-                </span>
-              </div>
-              <h3 className="text-sm font-bold uppercase tracking-tight text-slate-900 flex items-center gap-1.5 font-sans">
-                <Sliders className="w-4.5 h-4.5 text-slate-900" />
-                Prahari AI • Evaluation & Demo Sandbox
-              </h3>
-              <p className="text-[11px] text-slate-500 max-w-2xl">
-                This sandbox controls real Firestore collections. Click to seed the precise workspace scenarios described in our hackathon walkthrough video.
-              </p>
-            </div>
-            <button
-              onClick={() => setIsDemoSandboxOpen(false)}
-              className="px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-wider border border-slate-300 hover:border-slate-950 bg-white text-slate-600 hover:text-slate-950 rounded-xs transition-all cursor-pointer self-start sm:self-auto shadow-2xs"
-            >
-              Hide Sandbox
-            </button>
-          </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left Box: Controls & Seeder */}
-            <div className="lg:col-span-7 space-y-4">
-              <div className="space-y-2">
-                <h4 className="text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Available Simulation Tracks:</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div className="p-3 bg-white border border-slate-200 hover:border-slate-400 rounded-xs space-y-1 transition-all">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[8px] font-mono font-bold text-rose-700 bg-rose-50 border border-rose-150 px-1.5 py-0.5 rounded-sm">CRITICAL</span>
-                    </div>
-                    <h5 className="text-[10.5px] font-bold text-slate-800 font-mono tracking-tight leading-tight">Compiler Project</h5>
-                    <p className="text-[9px] text-slate-400 leading-normal">Triggers extreme risk score (94) and configures standalone rescue path standby.</p>
-                  </div>
-
-                  <div className="p-3 bg-white border border-slate-200 hover:border-slate-400 rounded-xs space-y-1 transition-all">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[8px] font-mono font-bold text-amber-700 bg-amber-50 border border-amber-150 px-1.5 py-0.5 rounded-sm">COMPRESS</span>
-                    </div>
-                    <h5 className="text-[10.5px] font-bold text-slate-800 font-mono tracking-tight leading-tight">SaaS Pitch Deck</h5>
-                    <p className="text-[9px] text-slate-400 leading-normal">Triggers automatic timeline calculations to prompt scope compression.</p>
-                  </div>
-
-                  <div className="p-3 bg-white border border-slate-200 hover:border-slate-400 rounded-xs space-y-1 transition-all">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[8px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-150 px-1.5 py-0.5 rounded-sm">ACTIVE TRACK</span>
-                    </div>
-                    <h5 className="text-[10.5px] font-bold text-slate-800 font-mono tracking-tight leading-tight">Final Presentation</h5>
-                    <p className="text-[9px] text-slate-400 leading-normal">Loads completed milestones, live countdown, and focus tracking backdrops.</p>
-                  </div>
-                </div>
-              </div>
-
-              {demoMessage && (
-                <div className="p-2.5 bg-slate-900 border border-slate-800 text-slate-100 text-[11px] font-mono rounded-xs flex items-center gap-2 animate-fade-in">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                  <span>{demoMessage}</span>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <button
-                  onClick={handleSeedDemo}
-                  disabled={demoActionLoading}
-                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-xs text-[10px] font-mono font-bold uppercase tracking-wider transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed border-none"
-                >
-                  {demoActionLoading ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Seeding Sandbox...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                      Seed Sandbox Targets
-                    </>
-                  )}
-                </button>
-                <button
-                  onClick={handleResetDemo}
-                  disabled={demoActionLoading}
-                  className="px-4 py-2.5 border border-slate-300 hover:border-slate-950 bg-white text-slate-700 hover:text-slate-950 rounded-xs text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer disabled:cursor-not-allowed shadow-2xs flex items-center gap-1.5"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                  Purge Workspace
-                </button>
-              </div>
-            </div>
-
-            {/* Right Box: Architecture Core Schematic */}
-            <div className="lg:col-span-5 p-4 bg-white border border-slate-200 rounded-xs space-y-3.5">
-              <h4 className="text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Prahari Core Tech Architecture:</h4>
-              <ul className="space-y-2.5 text-[10.5px] text-slate-600 font-sans leading-normal">
-                <li className="flex gap-2 items-start">
-                  <span className="font-mono text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded-sm shrink-0 font-bold">1</span>
-                  <span><strong className="text-slate-900">Risk Assessment Engine</strong>: Computes 0-100 hazard scores directly in Firestore matching compliance, safety-buffer, and category metrics.</span>
-                </li>
-                <li className="flex gap-2 items-start">
-                  <span className="font-mono text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded-sm shrink-0 font-bold">2</span>
-                  <span><strong className="text-slate-900">Tactical Rescue (Gemini 2.5)</strong>: Generates strict, low-overhead survival plans when tasks cross danger thresholds.</span>
-                </li>
-                <li className="flex gap-2 items-start">
-                  <span className="font-mono text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded-sm shrink-0 font-bold">3</span>
-                  <span><strong className="text-slate-900">AI Scope Compression</strong>: Compresses remaining scope in one click by pruning minor tasks and calculating saved minutes.</span>
-                </li>
-                <li className="flex gap-2 items-start">
-                  <span className="font-mono text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded-sm shrink-0 font-bold">4</span>
-                  <span><strong className="text-slate-900">Active Warning Layer</strong>: Connects browser notification permissions to push localized rescue prompts directly onto browser screen.</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </Card>
-      ) : (
-        <div className="flex items-center justify-between p-3 bg-slate-900 text-white rounded-xs text-xs font-mono">
-          <span className="flex items-center gap-1.5">
-            <Sliders className="w-4 h-4 text-amber-400 animate-pulse" />
-            <span>Prahari AI Sandbox & Evaluation Tools hidden.</span>
-          </span>
+        <div className="flex items-center gap-2 self-start sm:self-center">
           <button
-            onClick={() => setIsDemoSandboxOpen(true)}
-            className="text-[9px] font-mono font-bold uppercase tracking-wider bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-sm border-none text-white transition-all cursor-pointer"
+            id="create-task-btn"
+            onClick={() => setIsFormOpen(true)}
+            className="inline-flex items-center gap-2 bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] px-4 py-2 text-sm font-medium rounded-sm transition-all hover:-translate-y-0.5 hover:shadow-sm cursor-pointer border-none"
           >
-            Show Sandbox
+            <Plus className="w-4 h-4" />
+            <span>Add a deadline</span>
           </button>
         </div>
-      )}
+      </div>
 
-      {/* 0. NOTIFICATION PERMISSION ONBOARDING NUDGE */}
-      {NotificationService.isSupported() && permissionState === "default" && !nudgeClosed && (
-        <div className="p-4 bg-amber-500/10 border border-amber-300 rounded-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
-          <div className="flex gap-2.5 items-start sm:items-center">
-            <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-              <Bell className="w-4 h-4 text-amber-600 animate-pulse" />
-            </div>
-            <div className="space-y-0.5 text-left">
-              <h5 className="font-bold text-amber-900 font-mono uppercase text-[10px] tracking-wide flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                Enable High-Urgency System Alerts
-              </h5>
-              <p className="text-amber-800 leading-normal text-[11px]">
-                Activate real-time web notifications to receive immediate compression and crisis escalation nudges before deadlines breach.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
-            <button
-              onClick={handleRequestPermissionInline}
-              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xs text-[9px] font-mono font-bold uppercase tracking-wider transition-all shadow-2xs cursor-pointer"
-            >
-              Activate Alerts
-            </button>
-            <button
-              onClick={() => setNudgeClosed(true)}
-              className="p-1 hover:bg-slate-200/50 rounded-sm text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
-              title="Dismiss prompt"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ERROR FEEDBACK */}
       {error && (
-        <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xs flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-rose-600" />
+        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 text-sm rounded-sm flex items-center gap-2.5 animate-fade-in">
+          <ShieldAlert className="w-4.5 h-4.5 text-rose-600 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      {/* 1. URGENCY SUMMARY AREA (PREMIUM COMPACT GAUGE HEADER) */}
-      <section id="urgency-summary-area" className="grid grid-cols-1 lg:grid-cols-12 gap-6 bg-white border border-slate-200 rounded-sm overflow-hidden shadow-xs">
-        {/* Left Side: System Heat Gauge */}
-        <div className="lg:col-span-5 p-6 sm:p-8 bg-slate-900 text-white flex flex-col justify-between relative overflow-hidden">
-          <div className="absolute inset-0 opacity-[0.02] bg-[linear-gradient(to_right,#ffffff_1px,transparent_1px),linear-gradient(to_bottom,#ffffff_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none"></div>
-          
-          <div className="space-y-4 relative z-10">
-            <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold">System Status</span>
-            <div className="flex items-baseline gap-2">
-              <h3 className="text-2xl font-bold font-sans">
-                {criticalTasksCount > 0 ? "High Urgency Mode" : "Stable Execution"}
-              </h3>
-              <Badge urgency={criticalTasksCount > 0 ? "high" : "low"}>
-                {criticalTasksCount > 0 ? "Active" : "Nominal"}
-              </Badge>
+      {NotificationService.isSupported() &&
+        permissionState === "default" &&
+        !nudgeClosed && (
+          <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-sm animate-fade-in">
+            <div className="flex gap-3 items-start sm:items-center">
+              <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
+                <Bell className="w-4 h-4 text-amber-600 animate-pulse" />
+              </div>
+              <div className="space-y-0.5 text-left">
+                <h5 className="font-semibold text-amber-900 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                  Turn on deadline alerts
+                </h5>
+                <p className="text-[#7a7974] leading-normal text-sm max-w-2xl">
+                  Get notified when a task needs urgent attention.
+                </p>
+              </div>
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              {criticalTasksCount > 0 
-                ? "Workspace safety requires immediate path optimizations. Gemini compression is primed to analyze active blocker patterns."
-                : "All targets are within normal execution parameters. Maintain strict scoping to protect milestone integrity."}
-            </p>
+
+            <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+              <button
+                onClick={handleRequestPermissionInline}
+                className="px-3 py-1.5 bg-[#01696f] hover:bg-[#005156] text-white rounded-sm text-sm font-medium transition-all cursor-pointer border-none"
+              >
+                Enable alerts
+              </button>
+              <button
+                onClick={() => setNudgeClosed(true)}
+                className="p-1 hover:bg-[#f3f0ec] rounded-sm text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
+                title="Dismiss prompt"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+      {/* =========================================================================
+          ZONE 2: HERO
+          ========================================================================= */}
+      <section id="primary-status-hero" className="w-full">
+        {loading ? (
+          <div className="w-full bg-[#f3f0ec] border border-[#28251d]/10 rounded-sm p-12 text-center flex flex-col items-center justify-center space-y-4 animate-pulse">
+            <div className="w-6 h-6 border-2 border-[#01696f] border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-sm text-[#7a7974]">Loading your tasks...</span>
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-8 sm:p-12 text-center space-y-6 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-[#01696f]"></div>
+            <div className="w-12 h-12 bg-[#01696f]/10 rounded-full flex items-center justify-center mx-auto">
+              <ShieldCheck className="w-6 h-6 text-[#01696f]" />
+            </div>
+
+            <div className="space-y-2 max-w-lg mx-auto">
+              <h3 className="text-xl sm:text-2xl font-serif font-bold text-[#28251d]">
+                No active tasks yet
+              </h3>
+              <p className="text-sm text-[#7a7974] leading-relaxed">
+                Add your first deadline or load demo tasks to see how Prahari
+                identifies risk and builds rescue plans.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap justify-center gap-3 pt-2">
+              <button
+                onClick={handleLoadDemoScenarios}
+                className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium rounded-sm transition-all cursor-pointer border-none"
+              >
+                Load demo tasks
+              </button>
+              <button
+                onClick={() => setIsFormOpen(true)}
+                className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/45 bg-transparent text-[#28251d] text-sm font-medium rounded-sm transition-all cursor-pointer"
+              >
+                Add your first task
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 sm:p-8 grid lg:grid-cols-12 gap-8 items-center relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1.5 h-full bg-[#01696f]"></div>
+
+            <div className="lg:col-span-8 space-y-6">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full ${
+                      criticalTasksCount > 0
+                        ? "bg-amber-600 animate-pulse"
+                        : "bg-emerald-600"
+                    }`}
+                  ></span>
+                  <span className="text-[11px] font-medium tracking-wide text-[#7a7974]">
+                    {criticalTasksCount > 0
+                      ? "Needs attention"
+                      : "On track"}
+                  </span>
+                </div>
+
+                <h3 className="text-3xl font-serif font-bold text-[#28251d] tracking-tight leading-none">
+                  {criticalTasksCount > 0
+                    ? `${criticalTasksCount} task${
+                        criticalTasksCount > 1 ? "s" : ""
+                      } need attention`
+                    : "Your deadlines look stable"}
+                </h3>
+
+                <p className="text-sm text-[#7a7974] max-w-2xl leading-relaxed">
+                  {criticalTasksCount > 0
+                    ? "Prahari has identified tasks that may slip without intervention. Review the most critical one and start a rescue plan."
+                    : "Your current workload looks manageable. Keep moving through the next steps to stay ahead of deadlines."}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {spotlightTask && (
+                  <Link
+                    to={LockedRoute.RESCUE}
+                    state={{ taskId: spotlightTask.taskId }}
+                    className="inline-flex items-center justify-center bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium px-5 py-3 rounded-sm transition-all hover:-translate-y-0.5 hover:shadow-sm"
+                  >
+                    <span>Open rescue plan</span>
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Link>
+                )}
+
+                <button
+                  onClick={() => setIsFormOpen(true)}
+                  className="px-5 py-3 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm transition-all cursor-pointer"
+                >
+                  Add another task
+                </button>
+              </div>
+            </div>
+
+            <div className="lg:col-span-4 lg:border-l lg:border-[#28251d]/10 lg:pl-8 space-y-4">
+              <div className="space-y-1">
+                <span className="text-[11px] font-medium text-[#7a7974] block">
+                  Overall pressure
+                </span>
+                <span
+                  className={`text-4xl font-serif font-bold tracking-tight block ${
+                    criticalTasksCount > 0 ? "text-amber-700" : "text-emerald-700"
+                  }`}
+                >
+                  {criticalTasksCount > 0 ? "High" : "Low"}
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                <div className="h-2 bg-[#28251d]/5 rounded-full overflow-hidden flex">
+                  <div className="w-[15%] bg-emerald-600 h-full"></div>
+                  {criticalTasksCount > 0 && (
+                    <>
+                      <div className="w-[50%] bg-amber-500 h-full border-l border-[#f3f0ec]"></div>
+                      <div className="w-[17%] bg-rose-600 h-full border-l border-[#f3f0ec]"></div>
+                    </>
+                  )}
+                  <div className="flex-1"></div>
+                </div>
+
+                <div className="flex justify-between text-[10px] text-[#7a7974]">
+                  <span>Stable</span>
+                  <span>Warning</span>
+                  <span>Critical</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* =========================================================================
+          ZONE 3: SPOTLIGHT + NEXT ACTIONS
+          ========================================================================= */}
+      {tasks.length > 0 && (
+        <section id="active-target-and-actions" className="grid lg:grid-cols-12 gap-8 items-start">
+          <div className="lg:col-span-7 space-y-4 text-left">
+            <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10">
+              Most critical deadline
+            </h4>
+
+            {spotlightTask ? (
+              <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 space-y-5 relative overflow-hidden transition-all hover:border-[#28251d]/25">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-[#01696f]/3 rounded-bl-full pointer-events-none"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#28251d]/8">
+                  <div className="space-y-1">
+                    <span className="text-[11px] bg-[#01696f]/10 text-[#01696f] px-2 py-0.5 rounded-sm font-medium inline-block">
+                      {spotlightTask.category}
+                    </span>
+                    <h3 className="text-lg font-semibold text-[#28251d] tracking-tight">
+                      {spotlightTask.title}
+                    </h3>
+                  </div>
+
+                  <div className="self-start sm:self-auto flex items-center gap-1.5">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        spotlightTask.priority === "critical"
+                          ? "bg-rose-600 animate-ping"
+                          : "bg-amber-600"
+                      }`}
+                    ></span>
+                    <span className="text-[11px] font-medium text-[#7a7974]">
+                      {spotlightTask.priority} priority
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm text-[#7a7974]">
+                  <div className="space-y-0.5">
+                    <span className="text-[11px] text-[#7a7974]/80">Due</span>
+                    <p className="font-semibold text-[#28251d] flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#7a7974]" />
+                      {formatDeadlineDate(spotlightTask.deadline)}
+                    </p>
+                  </div>
+
+                  <div className="space-y-0.5">
+                    <span className="text-[11px] text-[#7a7974]/80">Estimated time</span>
+                    <p className="font-semibold text-[#01696f]">
+                      {(spotlightTask.estimatedMinutes / 60).toFixed(1)} hours
+                    </p>
+                  </div>
+
+                  <div className="col-span-2 sm:col-span-1 space-y-0.5">
+                    <span className="text-[11px] text-[#7a7974]/80">Next status</span>
+                    <p className="font-semibold text-[#28251d]">
+                      {spotlightTask.nextActionLabel || "Ready for review"}
+                    </p>
+                  </div>
+                </div>
+
+                {spotlightTask.riskReasonSummary ? (
+                  <div className="p-3 bg-[#f9f8f5] border border-[#28251d]/8 rounded-sm space-y-2 text-sm">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span className="font-medium text-amber-800">
+                        Why it’s at risk
+                      </span>
+                    </div>
+                    <p className="text-sm text-[#28251d] leading-relaxed">
+                      {spotlightTask.riskReasonSummary}
+                    </p>
+                    {spotlightTask.nextActionLabel && (
+                      <span className="inline-block text-[11px] bg-amber-100 text-amber-900 px-2 py-1 rounded-sm mt-1 font-medium">
+                        Suggested next step: {spotlightTask.nextActionLabel}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-[#f9f8f5] border border-[#28251d]/6 border-dashed rounded-sm text-center text-sm space-y-3">
+                    <p className="text-[#7a7974] leading-relaxed">
+                      This task has not been reviewed yet. Run an AI check to see
+                      what may cause it to slip.
+                    </p>
+                    <button
+                      onClick={() => handleReassessTask(spotlightTask)}
+                      disabled={assessingTaskId === spotlightTask.taskId}
+                      className="inline-flex items-center gap-1 bg-[#28251d] hover:bg-[#01696f] text-white px-3 py-1.5 text-sm font-medium rounded-sm transition-colors cursor-pointer border-none"
+                    >
+                      <Sparkles
+                        className={`w-3 h-3 ${
+                          assessingTaskId === spotlightTask.taskId ? "animate-spin" : ""
+                        }`}
+                      />
+                      <span>
+                        {assessingTaskId === spotlightTask.taskId
+                          ? "Checking..."
+                          : "Run AI check"}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="pt-2 flex items-center justify-between gap-4">
+                  <Link
+                    to={LockedRoute.RESCUE}
+                    state={{ taskId: spotlightTask.taskId }}
+                    className="inline-flex items-center justify-center w-full sm:w-auto bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium px-4 py-3 rounded-sm transition-all hover:translate-x-0.5 border-none"
+                  >
+                    <span>Open rescue plan</span>
+                    <ArrowUpRight className="w-3.5 h-3.5 ml-1.5" />
+                  </Link>
+
+                  <button
+                    onClick={(e) => handleDeleteTask(spotlightTask.taskId, e)}
+                    className="p-3 border border-rose-200 hover:border-rose-400 bg-transparent text-rose-600 hover:text-rose-800 transition-colors rounded-sm cursor-pointer"
+                    title="Delete task"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-[#7a7974]">No urgent task found.</p>
+            )}
+
+            {tasks.length > 1 && (
+              <div className="pt-2 space-y-2">
+                <span className="text-[11px] font-medium text-[#7a7974] block">
+                  Other tasks ({tasks.length - 1})
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {tasks
+                    .filter((t) => t.taskId !== spotlightTask?.taskId)
+                    .slice(0, 4)
+                    .map((t) => (
+                      <div
+                        key={t.taskId}
+                        className="bg-[#f3f0ec]/60 border border-[#28251d]/10 p-3.5 rounded-sm flex items-center justify-between gap-3 text-sm"
+                      >
+                        <div className="space-y-0.5 min-w-0">
+                          <p className="font-semibold text-[#28251d] line-clamp-1">
+                            {t.title}
+                          </p>
+                          <p className="text-[11px] text-[#7a7974]">
+                            {t.category} · {formatDeadlineDate(t.deadline)}
+                          </p>
+                        </div>
+                        <Link
+                          to={LockedRoute.RESCUE}
+                          state={{ taskId: t.taskId }}
+                          className="p-1.5 hover:bg-[#f3f0ec] rounded-full text-[#01696f]"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </Link>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="pt-8 relative z-10 space-y-3">
-            <div className="flex justify-between text-[10px] font-mono font-bold text-slate-400">
-              <span>SYSTEM RISK COEFFICIENT</span>
-              <span className={criticalTasksCount > 0 ? "text-amber-500" : "text-emerald-400"}>
-                {criticalTasksCount > 0 ? "82% RISK INDEX" : "15% RISK INDEX"}
+          <div className="lg:col-span-5 space-y-4 text-left">
+            <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10">
+              What to do next
+            </h4>
+
+            <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 space-y-4">
+              <div className="flex items-start gap-3 p-3 bg-[#f9f8f5] border border-[#28251d]/10 rounded-sm">
+                <button
+                  onClick={handleRequestPermissionInline}
+                  disabled={permissionState === "granted"}
+                  className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border-none transition-colors ${
+                    permissionState === "granted"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-[#01696f]/10 text-[#01696f] hover:bg-[#01696f]/20 cursor-pointer"
+                  }`}
+                >
+                  {permissionState === "granted" ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-700" />
+                  ) : (
+                    <Bell className="w-3.5 h-3.5 text-[#01696f]" />
+                  )}
+                </button>
+                <div className="space-y-0.5">
+                  <p
+                    className={`text-sm font-semibold ${
+                      permissionState === "granted"
+                        ? "text-[#7a7974] line-through"
+                        : "text-[#28251d]"
+                    }`}
+                  >
+                    Turn on alerts
+                  </p>
+                  <p className="text-[11px] text-[#7a7974]">
+                    {permissionState === "granted"
+                      ? "Deadline alerts are active"
+                      : "Get notified when a task becomes urgent"}
+                  </p>
+                </div>
+              </div>
+
+              {spotlightTask && (
+                <div className="flex items-start gap-3 p-3 bg-[#f9f8f5] border border-[#28251d]/10 rounded-sm">
+                  <button
+                    onClick={() => handleReassessTask(spotlightTask)}
+                    disabled={
+                      assessingTaskId === spotlightTask.taskId ||
+                      spotlightTask.riskReasonSummary !== undefined
+                    }
+                    className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border-none transition-all ${
+                      spotlightTask.riskReasonSummary
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-[#01696f]/10 text-[#01696f] hover:bg-[#01696f]/20 cursor-pointer"
+                    }`}
+                  >
+                    {spotlightTask.riskReasonSummary ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-700" />
+                    ) : (
+                      <Sparkles
+                        className={`w-3.5 h-3.5 text-[#01696f] ${
+                          assessingTaskId === spotlightTask.taskId ? "animate-spin" : ""
+                        }`}
+                      />
+                    )}
+                  </button>
+                  <div className="space-y-0.5">
+                    <p
+                      className={`text-sm font-semibold ${
+                        spotlightTask.riskReasonSummary
+                          ? "text-[#7a7974] line-through"
+                          : "text-[#28251d]"
+                      }`}
+                    >
+                      Review your most urgent task
+                    </p>
+                    <p className="text-[11px] text-[#7a7974]">
+                      {spotlightTask.riskReasonSummary
+                        ? "AI review is complete"
+                        : "Run an AI check to understand the risk"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-start gap-3 p-3 bg-[#f9f8f5] border border-[#28251d]/10 rounded-sm">
+                <div className="w-6 h-6 rounded-full bg-[#01696f]/10 text-[#01696f] flex items-center justify-center shrink-0">
+                  <Target className="w-3.5 h-3.5 text-[#01696f]" />
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-[#28251d]">
+                    Start the next rescue step
+                  </p>
+                  <p className="text-[11px] text-[#7a7974]">
+                    Focus on one concrete action instead of the whole task
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* =========================================================================
+          ZONE 4: SECONDARY INSIGHTS
+          ========================================================================= */}
+      <section id="secondary-insights" className="space-y-4">
+        <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10 text-left">
+          Recent activity & workload
+        </h4>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/10 pb-2.5 flex items-center justify-between">
+              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+                <Bell className="w-3.5 h-3.5 text-[#7a7974]" />
+                Alerts
+              </span>
+              {notifications.some((n) => !n.read) && (
+                <button
+                  onClick={handleMarkAllNotificationsRead}
+                  className="text-[11px] bg-transparent hover:underline text-[#01696f] hover:text-[#005156] cursor-pointer border-none"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            {loadingNotifications ? (
+              <p className="text-sm text-[#7a7974] animate-pulse">
+                Checking for new alerts...
+              </p>
+            ) : notifications.length === 0 ? (
+              <div className="py-6 text-center space-y-2">
+                <ShieldCheck className="w-6 h-6 text-emerald-600 mx-auto" />
+                <p className="text-sm text-[#7a7974] leading-normal max-w-[220px] mx-auto">
+                  No urgent alerts right now. Your tasks are stable.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[160px] overflow-y-auto pr-1">
+                {notifications.slice(0, 3).map((n) => (
+                  <div key={n.notificationId} className="space-y-1 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[11px] font-medium text-amber-700">
+                        {getFriendlyNotificationType(n.type)}
+                      </span>
+                      <span className="text-[11px] text-[#7a7974]">
+                        {n.createdAt instanceof Timestamp
+                          ? new Date(n.createdAt.toMillis()).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "Just now"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-[#28251d] leading-relaxed">{n.body}</p>
+                    {!n.read && (
+                      <button
+                        onClick={() => handleMarkNotificationRead(n.notificationId)}
+                        className="text-[11px] text-[#01696f] hover:underline cursor-pointer border-none bg-transparent"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/10 pb-2.5">
+              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-[#7a7974]" />
+                System readiness
               </span>
             </div>
-            <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
-              <div className="w-[35%] bg-emerald-500 h-full"></div>
-              {criticalTasksCount > 0 && (
-                <>
-                  <div className="w-[30%] bg-amber-500 h-full border-l border-slate-900"></div>
-                  <div className="w-[17%] bg-rose-500 h-full border-l border-slate-900"></div>
-                </>
-              )}
-              <div className="flex-1 bg-slate-800 h-full"></div>
+
+            <div className="space-y-3 text-sm text-[#7a7974] leading-relaxed">
+              <div className="flex gap-2">
+                <span className="text-emerald-600 font-bold">●</span>
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-[#28251d]">Task data is connected</p>
+                  <p>Changes are updating normally</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <span className="text-emerald-600 font-bold">●</span>
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-[#28251d]">AI planning is available</p>
+                  <p>Task risk analysis is ready</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <span className="text-amber-600 font-bold">●</span>
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-[#28251d]">Your session is secure</p>
+                  <p>You can continue safely</p>
+                </div>
+              </div>
             </div>
-            <div className="flex justify-between text-[9px] font-mono text-slate-500">
-              <span>0% SAFE</span>
-              <span>75% LIMIT</span>
-              <span>100% BREACH</span>
+          </div>
+
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/10 pb-2.5">
+              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+                <Hourglass className="w-3.5 h-3.5 text-[#7a7974]" />
+                Workload summary
+              </span>
             </div>
-          </div>
-        </div>
 
-        {/* Right Side: Key Telemetry Grid */}
-        <div className="lg:col-span-7 p-6 sm:p-8 grid grid-cols-2 gap-6 bg-white">
-          <div className="space-y-1">
-            <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Monitored Milestones</span>
-            <span className="text-3xl font-bold font-mono text-slate-900 tracking-tight block">
-              {loading ? "..." : tasks.length}
-            </span>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              Tracked live in Cloud Firestore database.
-            </p>
-          </div>
-
-          <div className="space-y-1">
-            <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Interventions Deployed</span>
-            <span className="text-3xl font-bold font-mono text-amber-600 tracking-tight block">
-              {tasks.filter(t => t.status === "mitigated").length}
-            </span>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              Mitigation structures calculated in active plans.
-            </p>
-          </div>
-
-          <div className="space-y-1 border-t border-slate-100 pt-4">
-            <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Total Workload Buffer</span>
-            <span className="text-3xl font-bold font-mono text-emerald-700 tracking-tight block">
-              {loading ? "..." : `${totalEstimatedHours}h`}
-            </span>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              Accumulated estimate for all active targets.
-            </p>
-          </div>
-
-          <div className="space-y-1 border-t border-slate-100 pt-4">
-            <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Real-time Connection</span>
-            <span className="text-3xl font-bold font-mono text-emerald-600 tracking-tight block">Active</span>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              Direct schema-validated read/write stream.
-            </p>
+            <div className="space-y-2.5 text-sm">
+              <div className="flex items-center justify-between pb-1 border-b border-[#28251d]/6">
+                <span className="text-[#7a7974]">Active tasks</span>
+                <span className="font-semibold text-[#28251d]">{tasks.length}</span>
+              </div>
+              <div className="flex items-center justify-between pb-1 border-b border-[#28251d]/6">
+                <span className="text-[#7a7974]">Estimated work</span>
+                <span className="font-semibold text-[#01696f]">
+                  {totalEstimatedHours} hours
+                </span>
+              </div>
+              <div className="flex items-center justify-between pb-1 border-b border-[#28251d]/6">
+                <span className="text-[#7a7974]">Completed or stabilized</span>
+                <span className="font-semibold text-emerald-700">
+                  {stabilizedCount}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[#7a7974]">Current state</span>
+                <span className="font-semibold text-[#28251d]">
+                  {criticalTasksCount > 0 ? "Needs attention" : "On track"}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* WORKSPACE SECTIONS GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* LEFT COLUMN: CRITICAL SPOTLIGHT & OVERVIEW */}
-        <div className="lg:col-span-8 space-y-8 flex flex-col">
-          
-          {/* 2. CRITICAL TASK SPOTLIGHT AREA */}
-          {spotlightTask ? (
-            <section id="critical-task-spotlight-area">
-              <Card className="border border-rose-200 bg-white shadow-2xs relative overflow-hidden p-6">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-rose-500"></div>
-                
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-sm bg-rose-50 border border-rose-200 flex items-center justify-center shrink-0 mt-0.5">
-                      <ShieldAlert className="w-4.5 h-4.5 text-rose-600" />
-                    </div>
-                    <div>
-                      <span className="text-[9px] uppercase font-mono tracking-wider font-bold text-rose-600">Immediate Intervention Target</span>
-                      <h3 className="text-sm font-bold text-slate-900 mt-0.5">{spotlightTask.title}</h3>
-                    </div>
-                  </div>
-                  <Badge urgency={spotlightTask.priority === "critical" ? "critical" : "high"}>
-                    {spotlightTask.priority.toUpperCase()} PRIORITY
-                  </Badge>
-                </div>
+      {/* =========================================================================
+          ZONE 5: DEMO SANDBOX
+          ========================================================================= */}
+      <section id="collapsible-sandbox-wrapper" className="space-y-4">
+        <div className="flex items-center justify-between p-4 bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm text-sm">
+          <div className="flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-[#01696f]" />
+            <span className="font-serif font-bold text-sm text-[#28251d]">
+              Demo scenarios
+            </span>
+          </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-5 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono uppercase text-slate-400 block">Category</span>
-                    <p className="font-semibold text-slate-800 leading-relaxed">{spotlightTask.category}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono uppercase text-slate-400 block">Deadline</span>
-                    <p className="font-semibold text-slate-800 flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      {spotlightTask.deadline instanceof Date 
-                        ? spotlightTask.deadline.toLocaleDateString()
-                        : (spotlightTask.deadline as any)?.toDate?.()?.toLocaleDateString() || String(spotlightTask.deadline)}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono uppercase text-slate-400 block">Est. Effort</span>
-                    <p className="font-bold text-rose-600">{(spotlightTask.estimatedMinutes / 60).toFixed(1)} hours</p>
-                  </div>
-                </div>
+          <button
+            onClick={() => setIsDemoSandboxOpen(!isDemoSandboxOpen)}
+            className="px-3 py-1.5 text-[11px] font-medium bg-transparent hover:bg-[#28251d]/5 text-[#7a7974] hover:text-[#28251d] border border-[#28251d]/15 hover:border-[#28251d]/35 rounded-sm transition-all cursor-pointer"
+          >
+            {isDemoSandboxOpen ? "Hide tools" : "Show tools"}
+          </button>
+        </div>
 
-                <div className="p-4 bg-slate-50 border border-slate-150 rounded-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <span className="text-[9px] font-mono font-bold text-amber-600 uppercase block">Workspace Analysis Status</span>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      {spotlightTask.description || "No description provided. Workspace mitigation engines are in standby until Phase 6."}
-                    </p>
-                  </div>
-                  <Link to={LockedRoute.RESCUE} state={{ taskId: spotlightTask.taskId }} className="shrink-0 w-full sm:w-auto">
-                    <Button size="sm" variant="primary" className="bg-rose-600 hover:bg-rose-700 text-white w-full sm:w-auto font-mono text-[10px] font-bold tracking-wider uppercase">
-                      Open Rescue Dashboard
-                    </Button>
-                  </Link>
-                </div>
-              </Card>
-            </section>
-          ) : (
-            <section id="empty-spotlight">
-              <Card className="border border-slate-200 bg-white p-6 text-center space-y-4">
-                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-                  <Target className="w-6 h-6 text-slate-400" />
-                </div>
+        {isDemoSandboxOpen && (
+          <div className="bg-[#f3f0ec]/45 border border-[#28251d]/12 rounded-sm p-6 space-y-6 text-left animate-fade-in">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-7 space-y-4">
                 <div className="space-y-1">
-                  <h4 className="text-sm font-bold text-slate-900">No active targets found</h4>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                    You have not added any workspace targets to monitor. Seed default demo scenarios or add your own target manually to start tracking.
+                  <h5 className="text-sm font-semibold text-[#28251d]">
+                    Demo controls
+                  </h5>
+                  <p className="text-sm text-[#7a7974] leading-relaxed">
+                    Load realistic sample tasks for your demo and clear them when
+                    needed.
                   </p>
                 </div>
-                <div className="flex justify-center gap-3">
-                  <Button size="sm" onClick={handleLoadDemoScenarios} variant="secondary">
-                    Seed Demo Scenarios
-                  </Button>
-                  <Button size="sm" onClick={() => setIsFormOpen(true)} variant="primary">
-                    Monitor Custom Target
-                  </Button>
-                </div>
-              </Card>
-            </section>
-          )}
 
-          {/* 3. TASK OVERVIEW AREA */}
-          {tasks.length > 0 && (
-            <section id="task-overview-area" className="bg-white border border-slate-200 rounded-sm shadow-xs flex flex-col">
-              <div className="p-6 border-b border-slate-150 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900 tracking-tight">Active Target Repositories</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Live list fetched dynamically from users/{firebaseUser?.uid}/tasks.</p>
-                </div>
-                <Badge urgency="neutral">{tasks.length} DEPLOYED</Badge>
-              </div>
-
-              <div className="divide-y divide-slate-100">
-                {tasks.map((target) => {
-                  const riskLevel = target.riskLevel || "safe";
-                  const riskScore = target.riskScore || 0;
-                  const evaluated = target.aiLastEvaluatedAt !== null;
-                  
-                  return (
-                    <div key={target.taskId} className="p-6 flex flex-col hover:bg-slate-50/30 transition-colors duration-150">
-                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 font-sans">
-                        
-                        {/* Task Information & Category */}
-                        <div className="space-y-2 max-w-lg">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h4 className="text-sm font-bold text-slate-900 leading-tight">{target.title}</h4>
-                            <Badge urgency={target.priority === "critical" ? "critical" : target.priority === "high" ? "high" : "low"}>
-                              {target.category}
-                            </Badge>
-                            
-                            {evaluated ? (
-                              <Badge urgency={riskLevel === "critical" ? "critical" : riskLevel === "watch" ? "medium" : "low"}>
-                                Risk: {riskScore}% ({riskLevel.toUpperCase()})
-                              </Badge>
-                            ) : (
-                              <Badge urgency="neutral">
-                                Unassessed
-                              </Badge>
-                            )}
-
-                            {target.status && (
-                              <Badge urgency={
-                                target.status === "completed" ? "low" :
-                                target.status === "compressed" ? "critical" :
-                                target.status === "in_progress" ? "medium" :
-                                target.status === "rescue_ready" ? "medium" : "neutral"
-                              }>
-                                {target.status.replace("_", " ").toUpperCase()}
-                              </Badge>
-                            )}
-                          </div>
-                          
-                          <p className="text-xs text-slate-600 leading-normal">{target.description}</p>
-                          
-                          {/* Task Progress Tracker Bar */}
-                          {target.progressPercentage !== undefined && (
-                            <div className="flex flex-col gap-1 py-1">
-                              <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 font-bold">
-                                <span>RESCUE MILESTONES</span>
-                                <span>{target.progressPercentage}% COMPLETE</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className="w-48 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                                  <div 
-                                    className={`h-full transition-all duration-300 ${target.status === "completed" ? "bg-emerald-500" : target.status === "compressed" ? "bg-rose-500" : "bg-amber-500"}`}
-                                    style={{ width: `${target.progressPercentage}%` }}
-                                  ></div>
-                                </div>
-                                <span className="text-[10px] font-mono text-slate-400">
-                                  ({target.completedStepsCount || 0}/{target.totalStepsCount || 0} steps)
-                                </span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* AI Risk Reason Summary */}
-                          {evaluated && target.riskReasonSummary && (
-                            <div className="p-3 bg-amber-50/40 border border-amber-100 rounded-xs flex items-start gap-2 text-xs">
-                              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
-                              <div className="space-y-1">
-                                <p className="text-slate-700 leading-relaxed font-sans">{target.riskReasonSummary}</p>
-                                {target.nextActionLabel && (
-                                  <span className="inline-block text-[9px] font-mono uppercase bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded-xs">
-                                    Next Action: {target.nextActionLabel}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 font-mono">
-                            <span className="flex items-center gap-1">
-                              <Hourglass className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              Deadline: {target.deadline instanceof Date 
-                                ? target.deadline.toLocaleDateString()
-                                : (target.deadline as any)?.toDate?.()?.toLocaleDateString() || String(target.deadline)}
-                            </span>
-                            <span className="hidden sm:inline">|</span>
-                            <span>Effort: {target.estimatedMinutes} mins</span>
-                            {evaluated && target.aiLastEvaluatedAt && (
-                              <>
-                                <span className="hidden sm:inline">|</span>
-                                <span className="flex items-center gap-1">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                                  Evaluated
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="flex sm:flex-col items-stretch sm:items-end gap-2.5 shrink-0 justify-end sm:justify-start pt-4 sm:pt-0 border-t sm:border-t-0 border-slate-100">
-                          
-                          {/* Open Rescue Page with Context-sensitive CTAs */}
-                          <Link to={LockedRoute.RESCUE} state={{ taskId: target.taskId }} className="focus:outline-hidden w-full sm:w-auto">
-                            {target.status === "in_progress" || target.status === "compressed" ? (
-                              <button className="w-full px-3.5 py-2 border border-amber-350 rounded-sm bg-amber-500 text-white hover:bg-amber-600 transition-colors cursor-pointer shadow-sm flex items-center justify-center gap-1.5 text-xs font-bold font-mono">
-                                <span className="text-[10px] tracking-wide">RESUME RESCUE</span>
-                                <ArrowRight className="w-3.5 h-3.5 text-white" />
-                              </button>
-                            ) : target.status === "rescue_ready" ? (
-                              <button className="w-full px-3.5 py-2 border border-emerald-350 rounded-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors cursor-pointer shadow-sm flex items-center justify-center gap-1.5 text-xs font-bold font-mono">
-                                <span className="text-[10px] tracking-wide">ACTIVATE PLAN</span>
-                                <Sparkles className="w-3.5 h-3.5 text-white" />
-                              </button>
-                            ) : (
-                              <button className="w-full px-3 py-2 border border-slate-200 hover:border-slate-300 rounded-sm bg-white hover:bg-slate-50 transition-colors text-slate-500 hover:text-slate-950 cursor-pointer shadow-2xs flex items-center justify-center gap-1.5 text-xs font-medium">
-                                <span className="text-[10px] font-mono text-slate-400">OPEN RESCUE</span>
-                                <ArrowUpRight className="w-3.5 h-3.5 text-slate-400" />
-                              </button>
-                            )}
-                          </Link>
-
-                          <div className="flex items-center gap-2 w-full sm:w-auto">
-                            {/* Manual Reassess Action */}
-                            <button 
-                              onClick={() => handleReassessTask(target)}
-                              disabled={assessingTaskId === target.taskId}
-                              className="flex-1 sm:flex-none px-2.5 py-2 border border-amber-200 hover:border-amber-300 rounded-sm bg-amber-50/30 hover:bg-amber-50 text-amber-700 hover:text-amber-900 cursor-pointer shadow-2xs text-[10px] font-mono uppercase font-bold flex items-center justify-center gap-1 disabled:opacity-50"
-                              title="Trigger Gemini Risk Assessment"
-                            >
-                              <Sparkles className={`w-3.5 h-3.5 text-amber-500 ${assessingTaskId === target.taskId ? "animate-spin" : ""}`} />
-                              {assessingTaskId === target.taskId ? "Assessing..." : "Reassess"}
-                            </button>
-
-                            {/* Delete Button */}
-                            <button 
-                              onClick={(e) => handleDeleteTask(target.taskId, e)}
-                              className="p-2 border border-rose-100 hover:border-rose-200 rounded-sm bg-rose-50/50 hover:bg-rose-50 text-rose-500 hover:text-rose-700 cursor-pointer shadow-2xs"
-                              title="Delete Workspace Target"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          
-                        </div>
-
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-        </div>
-
-        {/* RIGHT COLUMN: ACTIONS & ACTIVITY */}
-        <div className="lg:col-span-4 space-y-8">
-          
-          {/* NOTIFICATION & ESCALATION ALERTS FEED */}
-          <section id="escalation-alerts-feed">
-            <Card className="border border-slate-200 bg-white p-6 rounded-sm shadow-xs space-y-4">
-              <div className="border-b border-slate-150 pb-3 flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-900 flex items-center gap-1.5">
-                    <Bell className="w-4 h-4 text-slate-700" />
-                    <span>Escalation Feed</span>
-                  </h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Real-time deadline hazard alerts & guard cues.</p>
-                </div>
-                {notifications.some(n => !n.read) && (
-                  <button 
-                    onClick={handleMarkAllNotificationsRead}
-                    className="text-[9px] font-mono uppercase bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 px-2 py-1 rounded-sm flex items-center gap-1 transition-all cursor-pointer border-none"
-                    title="Mark all notifications as read"
-                  >
-                    <CheckCheck className="w-3 h-3 text-slate-500" />
-                    Clear All
-                  </button>
+                {demoMessage && (
+                  <div className="p-3 bg-[#28251d] text-white text-sm rounded-sm flex items-center gap-2 animate-fade-in">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>{demoMessage}</span>
+                  </div>
                 )}
-              </div>
 
-              {loadingNotifications ? (
-                <div className="py-8 text-center text-xs text-slate-400 font-mono flex items-center justify-center gap-2">
-                  <div className="w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
-                  Analyzing target vectors...
-                </div>
-              ) : notifications.length === 0 ? (
-                <div className="py-6 text-center space-y-2">
-                  <div className="w-9 h-9 bg-emerald-50 rounded-full flex items-center justify-center mx-auto border border-emerald-100">
-                    <ShieldCheck className="w-4.5 h-4.5 text-emerald-600" />
-                  </div>
-                  <div className="space-y-0.5">
-                    <h5 className="text-[11px] font-bold text-slate-900 font-mono uppercase">System Stable</h5>
-                    <p className="text-[10px] text-slate-400 max-w-[200px] mx-auto">
-                      All targets are monitored. No critical escalation flags have been generated.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
-                  {notifications.slice(0, 5).map((n) => (
-                    <div 
-                      key={n.notificationId} 
-                      className={`p-3 border rounded-xs transition-all text-left flex gap-2.5 relative ${
-                        n.read 
-                          ? "bg-slate-50/55 border-slate-150 opacity-65" 
-                          : n.escalationLevel === "critical"
-                            ? "bg-rose-50/40 border-rose-200"
-                            : "bg-amber-50/40 border-amber-200"
-                      }`}
-                    >
-                      {/* Left Dot or Indicator Icon */}
-                      <div className="shrink-0 mt-0.5">
-                        {n.escalationLevel === "critical" ? (
-                          <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                          </span>
-                        ) : n.escalationLevel === "warning" ? (
-                          <span className="relative flex h-2 w-2">
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                          </span>
-                        ) : (
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
-                        )}
-                      </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={handleSeedDemo}
+                    disabled={demoActionLoading}
+                    className="px-4 py-2.5 bg-[#01696f] hover:bg-[#005156] disabled:bg-slate-300 text-white rounded-sm text-sm font-medium transition-all cursor-pointer disabled:cursor-not-allowed border-none shadow-xs"
+                  >
+                    {demoActionLoading ? "Loading demo tasks..." : "Load demo tasks"}
+                  </button>
 
-                      {/* Notification Content */}
-                      <div className="space-y-1 pr-4">
-                        <div className="flex items-baseline gap-1.5 flex-wrap">
-                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wide ${
-                            n.read 
-                              ? "text-slate-500" 
-                              : n.escalationLevel === "critical"
-                                ? "text-rose-800"
-                                : "text-amber-800"
-                          }`}>
-                            {n.type.replace("_", " ")}
-                          </span>
-                          <span className="text-[8px] font-mono text-slate-400">
-                            {n.createdAt instanceof Timestamp 
-                              ? new Date(n.createdAt.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                              : "Just now"}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 leading-snug font-sans">{n.body}</p>
-                        
-                        {/* Direct action path link */}
-                        <div className="pt-1">
-                          <Link 
-                            to={LockedRoute.RESCUE} 
-                            state={{ taskId: n.relatedTaskId }}
-                            className={`text-[9px] font-mono font-bold uppercase tracking-wider flex items-center gap-0.5 ${
-                              n.read 
-                                ? "text-slate-400 hover:text-slate-600" 
-                                : n.escalationLevel === "critical"
-                                  ? "text-rose-600 hover:text-rose-700"
-                                  : "text-amber-600 hover:text-amber-700"
-                            }`}
-                          >
-                            <span>Trigger Mitigation</span>
-                            <ChevronRight className="w-3 h-3" />
-                          </Link>
-                        </div>
-                      </div>
-
-                      {/* Simple dismiss/mark-as-read check on right */}
-                      {!n.read && (
-                        <button
-                          onClick={() => handleMarkNotificationRead(n.notificationId)}
-                          className="absolute top-2 right-2 p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-sm transition-colors cursor-pointer border-none bg-transparent"
-                          title="Mark as read"
-                        >
-                          <Check className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-          </section>
-          
-          {/* 4. NEXT ACTION AREA */}
-          <section id="next-action-area">
-            <Card className="border border-slate-200 bg-white p-6 rounded-sm shadow-xs space-y-5">
-              <div className="border-b border-slate-150 pb-3 flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-900">Next Actions</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Execution checklist to lock down delivery.</p>
-                </div>
-                <Sliders className="w-4 h-4 text-slate-400" />
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-start gap-2.5 p-2 bg-slate-50/50 border border-slate-100 rounded-sm text-xs">
-                  <span className="w-4.5 h-4.5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3 text-emerald-700" />
-                  </span>
-                  <div className="space-y-0.5 text-left">
-                    <p className="font-semibold text-slate-500 line-through">Establish Firestore connection</p>
-                    <p className="text-[10px] text-slate-400">Direct write/read subcollections are configured.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2.5 p-2 bg-white border border-slate-150 rounded-sm text-xs">
-                  <span className="w-4.5 h-4.5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 font-mono text-[9px] font-bold">
-                    2
-                  </span>
-                  <div className="space-y-0.5 text-left">
-                    <p className="font-semibold text-slate-800">Add first active milestone</p>
-                    <p className="text-[10px] text-slate-500">Add or generate real-time milestones to map risk.</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2.5 p-2 bg-white border border-slate-150 rounded-sm text-xs opacity-50">
-                  <span className="w-4.5 h-4.5 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0 font-mono text-[9px] font-bold">
-                    3
-                  </span>
-                  <div className="space-y-0.5 text-left">
-                    <p className="font-semibold text-slate-500">Run Gemini risk evaluation</p>
-                    <p className="text-[10px] text-slate-400">Locked until AI Mitigation phase (Phase 6).</p>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          </section>
-
-          {/* 5. RECENT ACTIVITY AREA */}
-          <section id="recent-activity-area">
-            <Card className="border border-slate-200 bg-white p-6 rounded-sm shadow-xs flex flex-col justify-between">
-              <div className="space-y-5">
-                <div className="border-b border-slate-150 pb-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-900">Workspace Telemetry</h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Audit log of system telemetry audits & calculations.</p>
-                </div>
-
-                <div className="space-y-4 text-xs text-slate-600">
-                  <div className="flex gap-2.5 items-start">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5"></div>
-                    <div className="space-y-0.5 text-left">
-                      <p className="font-semibold text-slate-900 leading-none">Database configured</p>
-                      <p className="text-slate-500 text-[11px] mt-1">
-                        Prahari AI is now synced live with Firestore database continual-caster-1k8sk.
-                      </p>
-                      <span className="text-[10px] text-slate-400 font-mono block mt-1">Just now</span>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2.5 items-start">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5"></div>
-                    <div className="space-y-0.5 text-left">
-                      <p className="font-semibold text-slate-900 leading-none">Firebase Core Setup Deployed</p>
-                      <p className="text-slate-500 text-[11px] mt-1">
-                        Real Firebase Email/Password Auth is active.
-                      </p>
-                      <span className="text-[10px] text-slate-400 font-mono block mt-1">Today</span>
-                    </div>
-                  </div>
+                  <button
+                    onClick={handleResetDemo}
+                    disabled={demoActionLoading}
+                    className="px-4 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-white text-[#28251d] rounded-sm text-sm font-medium transition-all cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Clear demo tasks
+                  </button>
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 mt-6 flex items-center justify-between text-[10px] text-slate-400 font-mono select-none">
-                <span className="flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  SYSTEM INTEGRITY SYNCED
-                </span>
-                <FileText className="w-3.5 h-3.5 text-slate-300" />
+              <div className="lg:col-span-5 bg-[#f3f0ec] border border-[#28251d]/10 rounded-sm p-4 space-y-3 text-sm">
+                <h5 className="font-semibold text-[#7a7974] tracking-wide">
+                  How Prahari works
+                </h5>
+                <ul className="space-y-2 text-[#7a7974] leading-relaxed">
+                  <li className="flex gap-2 items-start">
+                    <span className="font-semibold text-[#28251d] bg-[#f9f8f5] px-1 rounded-sm">
+                      1
+                    </span>
+                    <span>
+                      <strong>Risk analysis</strong>: Prahari checks priority, time
+                      left, and workload pressure.
+                    </span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <span className="font-semibold text-[#28251d] bg-[#f9f8f5] px-1 rounded-sm">
+                      2
+                    </span>
+                    <span>
+                      <strong>Recovery planning</strong>: AI turns urgent work into
+                      smaller, achievable next steps.
+                    </span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <span className="font-semibold text-[#28251d] bg-[#f9f8f5] px-1 rounded-sm">
+                      3
+                    </span>
+                    <span>
+                      <strong>Alerts</strong>: Prahari warns users when a task needs
+                      attention.
+                    </span>
+                  </li>
+                </ul>
               </div>
-            </Card>
-          </section>
-
-        </div>
-
-      </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* =========================================================================
-          MONITOR NEW TARGET MODAL FORM (OPTIONAL FEAT IF STABLE)
+          MODAL
           ========================================================================= */}
       {isFormOpen && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-          <Card className="bg-white border border-slate-200 max-w-md w-full p-6 shadow-xl space-y-5 animate-slide-up relative">
-            <button 
+        <div className="fixed inset-0 bg-[#28251d]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-[#f3f0ec] border border-[#28251d]/12 max-w-md w-full p-6 sm:p-8 rounded-sm shadow-lg space-y-5 animate-slide-up relative">
+            <button
               onClick={() => setIsFormOpen(false)}
-              className="absolute top-4 right-4 p-1 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 hover:bg-[#28251d]/5 rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
+              title="Close modal"
             >
               <X className="w-4.5 h-4.5" />
             </button>
 
-            <div className="space-y-1">
-              <h3 className="text-base font-bold text-slate-950">Monitor Deployed Milestone Target</h3>
-              <p className="text-xs text-slate-500">Configure parameters to deploy a new monitoring matrix block.</p>
+            <div className="space-y-1.5 text-left">
+              <h3 className="text-xl font-serif font-bold text-[#28251d]">
+                Add a deadline
+              </h3>
+              <p className="text-sm text-[#7a7974]">
+                Tell Prahari what needs to be done and when it is due.
+              </p>
             </div>
 
             <form onSubmit={handleSubmitTask} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Target Title</label>
-                <input 
-                  type="text" 
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Task title
+                </label>
+                <input
+                  type="text"
                   required
-                  placeholder="e.g. GDPR Compliance Verification"
+                  placeholder="e.g., Finish assignment draft"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 hover:bg-slate-50/50 border border-slate-250 focus:border-slate-900 focus:bg-white rounded-xs focus:ring-0 focus:outline-hidden transition-all"
+                  className="w-full px-3 py-2.5 text-sm text-[#28251d] placeholder:text-[#7a7974]/40 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/25 focus:border-[#01696f] rounded-sm focus:ring-0 focus:outline-none transition-all"
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Description / Scope Details</label>
-                <textarea 
-                  placeholder="Verify critical endpoints, exclude secondary telemetry logs, etc."
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Task details
+                </label>
+                <textarea
+                  placeholder="Add context, blockers, or what still needs to be done..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={2}
-                  className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 hover:bg-slate-50/50 border border-slate-250 focus:border-slate-900 focus:bg-white rounded-xs focus:ring-0 focus:outline-hidden transition-all"
+                  className="w-full px-3 py-2.5 text-sm text-[#28251d] placeholder:text-[#7a7974]/40 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/25 focus:border-[#01696f] rounded-sm focus:ring-0 focus:outline-none transition-all resize-none"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Category</label>
-                  <select 
-                    value={category} 
+                <div className="space-y-1 text-left">
+                  <label className="text-[11px] font-medium text-[#7a7974] block">
+                    Category
+                  </label>
+                  <select
+                    value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-250 rounded-xs focus:ring-0 focus:outline-hidden"
+                    className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
                   >
                     <option value="Compliance">Compliance</option>
                     <option value="Integration">Integration</option>
@@ -1174,12 +1186,14 @@ export function DashboardPage() {
                   </select>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Priority Level</label>
-                  <select 
-                    value={priority} 
+                <div className="space-y-1 text-left">
+                  <label className="text-[11px] font-medium text-[#7a7974] block">
+                    Priority
+                  </label>
+                  <select
+                    value={priority}
                     onChange={(e) => setPriority(e.target.value)}
-                    className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-250 rounded-xs focus:ring-0 focus:outline-hidden"
+                    className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
                   >
                     <option value="critical">Critical</option>
                     <option value="high">High</option>
@@ -1190,52 +1204,96 @@ export function DashboardPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Hard Deadline</label>
-                  <input 
-                    type="date" 
+                <div className="space-y-1 text-left">
+                  <label className="text-[11px] font-medium text-[#7a7974] block">
+                    Due date
+                  </label>
+                  <input
+                    type="date"
                     required
                     value={deadline}
                     onChange={(e) => setDeadline(e.target.value)}
-                    className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-250 rounded-xs focus:ring-0 focus:outline-hidden"
+                    className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">Est. Time (Mins)</label>
-                  <input 
-                    type="number" 
+                <div className="space-y-1 text-left">
+                  <label className="text-[11px] font-medium text-[#7a7974] block">
+                    Estimated time (minutes)
+                  </label>
+                  <input
+                    type="number"
                     required
                     min={1}
                     value={estimatedMinutes}
                     onChange={(e) => setEstimatedMinutes(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-xs text-slate-900 bg-slate-50 border border-slate-250 rounded-xs focus:ring-0 focus:outline-hidden"
+                    className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
                   />
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-150 flex justify-end gap-3">
-                <Button 
-                  type="button" 
-                  onClick={() => setIsFormOpen(false)} 
-                  variant="secondary"
-                  size="sm"
+              <div className="pt-4 border-t border-[#28251d]/10 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsFormOpen(false)}
+                  className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm cursor-pointer"
                 >
                   Cancel
-                </Button>
-                <Button 
-                  type="submit" 
-                  variant="primary"
-                  size="sm"
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#01696f] hover:bg-[#005156] text-white text-sm font-medium rounded-sm transition-all cursor-pointer border-none shadow-xs"
                 >
-                  Sync to Firestore
-                </Button>
+                  Save task
+                </button>
               </div>
             </form>
-          </Card>
+          </div>
         </div>
       )}
 
+      {taskToDelete && (
+        <div className="fixed inset-0 bg-[#28251d]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-[#f9f8f5] border border-rose-200/40 max-w-sm w-full p-6 rounded-sm shadow-xl space-y-4 animate-slide-up relative">
+            <button
+              onClick={() => setTaskToDelete(null)}
+              className="absolute top-4 right-4 p-1.5 hover:bg-[#28251d]/5 rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
+              title="Close modal"
+            >
+              <X className="w-4.5 h-4.5" />
+            </button>
+
+            <div className="space-y-2 text-left">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="text-lg font-serif font-bold text-[#28251d]">
+                Delete Task?
+              </h3>
+              <p className="text-sm text-[#7a7974] leading-relaxed">
+                Are you sure you want to delete this task? This action cannot be undone and will permanently remove this task and its associated plans.
+              </p>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setTaskToDelete(null)}
+                className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteTask}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium rounded-sm transition-all cursor-pointer border-none shadow-xs"
+              >
+                Delete task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

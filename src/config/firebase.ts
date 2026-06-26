@@ -8,7 +8,43 @@ import { getAuth } from "firebase/auth";
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
 
-const isConfigured = !!firebaseConfig && !!firebaseConfig.apiKey;
+// Dynamic LocalStorage & Environment Overrides to securely bind custom runtime values without exposure
+const getActiveConfig = () => {
+  const activeConfig = { ...firebaseConfig };
+
+  // Prioritize Vite environment variables if defined (secure runtime configuration)
+  if (import.meta.env.VITE_FIREBASE_API_KEY) activeConfig.apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+  if (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) activeConfig.authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
+  if (import.meta.env.VITE_FIREBASE_PROJECT_ID) activeConfig.projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  if (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) activeConfig.storageBucket = import.meta.env.VITE_FIREBASE_STORAGE_BUCKET;
+  if (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) activeConfig.messagingSenderId = import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID;
+  if (import.meta.env.VITE_FIREBASE_APP_ID) activeConfig.appId = import.meta.env.VITE_FIREBASE_APP_ID;
+  if (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID) activeConfig.measurementId = import.meta.env.VITE_FIREBASE_MEASUREMENT_ID;
+
+  if (typeof window !== "undefined") {
+    const customApiKey = localStorage.getItem("prahari_firebase_api_key");
+    const customAuthDomain = localStorage.getItem("prahari_firebase_auth_domain");
+    const customProjectId = localStorage.getItem("prahari_firebase_project_id");
+    const customStorageBucket = localStorage.getItem("prahari_firebase_storage_bucket");
+    const customMessagingSenderId = localStorage.getItem("prahari_firebase_messaging_sender_id");
+    const customAppId = localStorage.getItem("prahari_firebase_app_id");
+    const customFirestoreDatabaseId = localStorage.getItem("prahari_firebase_firestore_database_id");
+
+    if (customApiKey) activeConfig.apiKey = customApiKey;
+    if (customAuthDomain) activeConfig.authDomain = customAuthDomain;
+    if (customProjectId) activeConfig.projectId = customProjectId;
+    if (customStorageBucket) activeConfig.storageBucket = customStorageBucket;
+    if (customMessagingSenderId) activeConfig.messagingSenderId = customMessagingSenderId;
+    if (customAppId) activeConfig.appId = customAppId;
+    if (customFirestoreDatabaseId) {
+      activeConfig.firestoreDatabaseId = customFirestoreDatabaseId;
+    }
+  }
+  return activeConfig;
+};
+
+const activeFirebaseConfig = getActiveConfig();
+const isConfigured = !!activeFirebaseConfig && !!activeFirebaseConfig.apiKey;
 
 // Initialize standard services
 let app: any = null;
@@ -17,8 +53,8 @@ export let auth: any = null;
 
 if (isConfigured) {
   try {
-    app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-    db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    app = getApps().length === 0 ? initializeApp(activeFirebaseConfig) : getApp();
+    db = getFirestore(app, activeFirebaseConfig.firestoreDatabaseId);
     auth = getAuth(app);
     console.log("Firebase initialized successfully on Prahari AI.");
     
@@ -28,7 +64,7 @@ if (isConfigured) {
         await getDocFromServer(doc(db, "test", "connection"));
       } catch (error) {
         if (error instanceof Error && error.message.includes("the client is offline")) {
-          console.error("Please check your Firebase configuration: Client is offline.");
+          console.warn("Please check your Firebase configuration: Client is offline.");
         }
       }
     };

@@ -1,31 +1,35 @@
 /**
  * Prahari AI Design Tokens
- * Enforces a professional, calm, but high-urgency light theme.
- * No purple gradients, no neon glassmorphism.
+ * Calm, high-trust, action-oriented light theme.
+ * Built for deadline rescue workflows — not generic admin dashboards.
  */
 
 export const DESIGN_TOKENS = {
   colors: {
-    // Primary background and canvas elements
     background: {
-      base: "bg-slate-50",        // Light neutral background
-      card: "bg-white",           // Card backings
-      alt: "bg-slate-100",        // Secondary background segments
+      base: "bg-[#f9f8f5]",
+      card: "bg-[#f3f0ec]",
+      alt: "bg-[#efeae3]",
+      subtle: "bg-[#f6f3ee]",
     },
-    // Main textual and typography values
     text: {
-      primary: "text-slate-900",  // Crisp high-contrast reading text
-      secondary: "text-slate-600",// Meta/subtext
-      tertiary: "text-slate-400", // Muted placeholders/borders
+      primary: "text-[#28251d]",
+      secondary: "text-[#7a7974]",
+      tertiary: "text-[#a19d96]",
+      inverse: "text-[#f9f8f5]",
     },
-    // The "Calm Urgent" brand palette
+    border: {
+      soft: "border-[#28251d]/10",
+      medium: "border-[#28251d]/14",
+      strong: "border-[#28251d]/20",
+    },
     brand: {
-      primary: "bg-slate-900 hover:bg-slate-800 text-white", // Dark structural primary
-      primaryText: "text-slate-900",
-      accent: "text-amber-600",    // Calming warning tone
-      accentBg: "bg-amber-50 border-amber-200 text-amber-900",
+      primary: "bg-[#01696f] hover:bg-[#005156] text-white",
+      primaryText: "text-[#01696f]",
+      primarySoft: "bg-[#01696f]/10 text-[#01696f] border border-[#01696f]/15",
+      accent: "text-[#d97706]",
+      accentBg: "bg-amber-50 text-amber-900 border border-amber-200",
     },
-    // Diagnostic urgency levels
     urgency: {
       low: {
         bg: "bg-emerald-50",
@@ -45,21 +49,35 @@ export const DESIGN_TOKENS = {
         text: "text-rose-700",
         badge: "bg-rose-100 text-rose-800",
       },
-    }
+      critical: {
+        bg: "bg-red-50",
+        border: "border-red-200",
+        text: "text-red-700",
+        badge: "bg-red-100 text-red-900",
+      },
+    },
   },
   typography: {
     fontSans: "font-sans",
     fontMono: "font-mono",
-    headings: "font-sans font-semibold tracking-tight text-slate-900",
+    fontSerif: "font-serif",
+    headings: "font-sans font-semibold tracking-tight text-[#28251d]",
+    display: "font-serif tracking-tight text-[#28251d]",
+    body: "font-sans text-[#28251d]",
+    meta: "font-sans text-[#7a7974]",
   },
   shadows: {
-    sm: "shadow-xs",
-    md: "shadow-sm",
-    lg: "shadow-md border border-slate-100",
+    sm: "shadow-[0_2px_8px_rgba(40,37,29,0.04)]",
+    md: "shadow-[0_8px_24px_rgba(40,37,29,0.06)]",
+    lg: "shadow-[0_14px_34px_rgba(40,37,29,0.08)]",
   },
   radius: {
     sm: "rounded-sm",
     md: "rounded-md",
     lg: "rounded-lg",
-  }
+  },
+  transitions: {
+    standard: "transition-all duration-200 ease-out",
+    slow: "transition-all duration-300 ease-out",
+  },
 };

@@ -1,22 +1,180 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital,wght@0,400;1,400&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@300,400,500,700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Instrument Serif", Georgia, serif;
+  --font-sans: "Satoshi", "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 
-/* Base style resets to make layouts smooth */
-body {
-  font-family: var(--font-sans);
-  background-color: #f8fafc; /* Slate 50 background */
+:root {
+  --color-bg: #f9f8f5;
+  --color-surface: #f3f0ec;
+  --color-surface-2: #efeae3;
+  --color-text: #28251d;
+  --color-text-muted: #7a7974;
+  --color-border: rgba(40, 37, 29, 0.12);
+  --color-border-strong: rgba(40, 37, 29, 0.18);
+  --color-primary: #01696f;
+  --color-primary-hover: #005156;
+  --color-success: #437a22;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --shadow-soft: 0 8px 24px rgba(40, 37, 29, 0.06);
+  --shadow-card: 0 4px 14px rgba(40, 37, 29, 0.05);
+  --transition-standard: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Smooth custom keyframe animations for phase transitions */
-@keyframes fadeIn {
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    text-size-adjust: none;
+    -webkit-text-size-adjust: none;
+    -moz-text-size-adjust: none;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    line-height: 1.6;
+  }
+
+  img,
+  picture,
+  video,
+  canvas,
+  svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  input,
+  button,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    transition:
+      background var(--transition-standard),
+      color var(--transition-standard),
+      border-color var(--transition-standard),
+      box-shadow var(--transition-standard),
+      transform var(--transition-standard),
+      opacity var(--transition-standard);
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    border: none;
+    background: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 0;
+    line-height: 1.1;
+    text-wrap: balance;
+  }
+
+  p {
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: rgba(1, 105, 111, 0.14);
+    color: var(--color-text);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba(1, 105, 111, 0.6);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  body::-webkit-scrollbar,
+  main::-webkit-scrollbar,
+  div::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  body::-webkit-scrollbar-track,
+  main::-webkit-scrollbar-track,
+  div::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  body::-webkit-scrollbar-thumb,
+  main::-webkit-scrollbar-thumb,
+  div::-webkit-scrollbar-thumb {
+    background: rgba(40, 37, 29, 0.14);
+    border-radius: 999px;
+  }
+
+  body::-webkit-scrollbar-thumb:hover,
+  main::-webkit-scrollbar-thumb:hover,
+  div::-webkit-scrollbar-thumb:hover {
+    background: rgba(40, 37, 29, 0.22);
+  }
+}
+
+/* Hide generic PublicLayout chrome on custom landing/auth pages */
+#public-layout-root:has(#landing-root) #public-header,
+#public-layout-root:has(#auth-root) #public-header {
+  display: none !important;
+}
+
+#public-layout-root:has(#landing-root) #public-footer,
+#public-layout-root:has(#auth-root) #public-footer {
+  display: none !important;
+}
+
+/* Animation keyframes */
+@keyframes clipReveal {
+  from {
+    clip-path: inset(100% 0 0 0);
+    opacity: 0;
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUpSoft {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(18px);
   }
   to {
     opacity: 1;
@@ -24,6 +182,99 @@ body {
   }
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+@keyframes fadeInRightSoft {
+  from {
+    opacity: 0;
+    transform: translateX(32px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes subtlePulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.animate-clip-reveal {
+  animation: clipReveal 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUpSoft 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in-right {
+  animation: fadeInRightSoft 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-subtle-pulse {
+  animation: subtlePulse 2.2s ease-in-out infinite;
+}
+
+/* Text wipe utility */
+.wipe-text-hidden {
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.wipe-text-visible {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Utility surfaces */
+.surface-primary {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.surface-soft {
+  background: rgba(243, 240, 236, 0.55);
+  border: 1px solid rgba(40, 37, 29, 0.08);
+}
+
+.text-muted {
+  color: var(--color-text-muted);
+}
+
+.text-primary {
+  color: var(--color-text);
+}
+
+.text-teal {
+  color: var(--color-primary);
+}
+
+.bg-teal-brand {
+  background-color: var(--color-primary);
+}
+
+.bg-teal-brand:hover {
+  background-color: var(--color-primary-hover);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .wipe-text-hidden,
+  .wipe-text-visible {
+    clip-path: none !important;
+  }
 }

@@ -1,9 +1,5 @@
 import React from "react";
-import { ArrowRight } from "lucide-react";
 
-// =========================================================================
-// BUTTON COMPONENT
-// =========================================================================
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "primary" | "secondary" | "outline" | "destructive";
   size?: "sm" | "md" | "lg";
@@ -22,19 +18,24 @@ export const Button: React.FC<ButtonProps> = ({
   className = "",
   ...props
 }) => {
-  const baseStyle = "inline-flex items-center justify-center font-medium rounded-xs transition-all duration-200 cursor-pointer focus:outline-hidden disabled:opacity-50 disabled:cursor-not-allowed";
-  
+  const baseStyle =
+    "inline-flex items-center justify-center rounded-sm font-medium transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none";
+
   const variants = {
-    primary: "bg-slate-900 hover:bg-slate-800 text-white shadow-xs focus:ring-2 focus:ring-slate-950 focus:ring-offset-2",
-    secondary: "bg-slate-100 hover:bg-slate-200 text-slate-900 focus:ring-2 focus:ring-slate-200",
-    outline: "border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 hover:text-slate-900 focus:ring-2 focus:ring-slate-200",
-    destructive: "bg-rose-600 hover:bg-rose-700 text-white shadow-xs focus:ring-2 focus:ring-rose-500 focus:ring-offset-2",
+    primary:
+      "bg-[#01696f] hover:bg-[#005156] text-white shadow-sm focus:ring-2 focus:ring-[#01696f]/20 focus:ring-offset-2",
+    secondary:
+      "bg-[#f3f0ec] hover:bg-[#ebe7e1] text-[#28251d] border border-[#28251d]/10 focus:ring-2 focus:ring-[#28251d]/10",
+    outline:
+      "bg-transparent border border-[#28251d]/14 hover:border-[#28251d]/28 hover:bg-[#f3f0ec]/70 text-[#28251d] focus:ring-2 focus:ring-[#28251d]/10",
+    destructive:
+      "bg-rose-600 hover:bg-rose-700 text-white shadow-sm focus:ring-2 focus:ring-rose-500/20 focus:ring-offset-2",
   };
 
   const sizes = {
     sm: "px-3 py-1.5 text-xs gap-1.5",
-    md: "px-4.5 py-2.5 text-sm gap-2",
-    lg: "px-6 py-3.5 text-base gap-2.5",
+    md: "px-4 py-2.5 text-sm gap-2",
+    lg: "px-5 py-3 text-base gap-2.5",
   };
 
   const widthStyle = fullWidth ? "w-full" : "";
@@ -51,9 +52,6 @@ export const Button: React.FC<ButtonProps> = ({
   );
 };
 
-// =========================================================================
-// CARD COMPONENT
-// =========================================================================
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   hoverEffect?: boolean;
   padded?: boolean;
@@ -68,8 +66,8 @@ export const Card: React.FC<CardProps> = ({
 }) => {
   return (
     <div
-      className={`bg-white border border-slate-200 rounded-sm shadow-xs transition-all duration-300 ${
-        hoverEffect ? "hover:border-slate-300 hover:shadow-sm" : ""
+      className={`bg-[#f3f0ec] border border-[#28251d]/10 rounded-sm transition-all duration-200 ${
+        hoverEffect ? "hover:border-[#28251d]/18 hover:shadow-sm" : ""
       } ${padded ? "p-6" : ""} ${className}`}
       {...props}
     >
@@ -78,9 +76,6 @@ export const Card: React.FC<CardProps> = ({
   );
 };
 
-// =========================================================================
-// BADGE COMPONENT
-// =========================================================================
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   urgency?: "low" | "medium" | "high" | "critical" | "neutral";
 }
@@ -95,13 +90,13 @@ export const Badge: React.FC<BadgeProps> = ({
     low: "bg-emerald-50 text-emerald-800 border border-emerald-200",
     medium: "bg-amber-50 text-amber-800 border border-amber-200",
     high: "bg-rose-50 text-rose-800 border border-rose-200",
-    critical: "bg-red-100 text-red-900 border border-red-300 font-semibold",
-    neutral: "bg-slate-100 text-slate-800 border border-slate-200",
+    critical: "bg-red-100 text-red-900 border border-red-300",
+    neutral: "bg-[#f9f8f5] text-[#5f5b53] border border-[#28251d]/10",
   };
 
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-sm text-[11px] font-mono tracking-wide font-medium uppercase shrink-0 ${styles[urgency]} ${className}`}
+      className={`inline-flex items-center px-2.5 py-1 rounded-sm text-[11px] font-medium shrink-0 ${styles[urgency]} ${className}`}
       {...props}
     >
       {children}
@@ -109,9 +104,6 @@ export const Badge: React.FC<BadgeProps> = ({
   );
 };
 
-// =========================================================================
-// INPUT FIELD COMPONENT
-// =========================================================================
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
@@ -127,13 +119,13 @@ export const Input: React.FC<InputProps> = ({
   return (
     <div className="space-y-1.5 w-full">
       {label && (
-        <label htmlFor={id} className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+        <label htmlFor={id} className="block text-xs font-medium text-[#7a7974]">
           {label}
         </label>
       )}
       <input
         id={id}
-        className={`w-full px-3.5 py-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-slate-900 rounded-sm text-sm focus:outline-hidden transition-all duration-200 ${
+        className={`w-full px-3.5 py-2.5 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/22 focus:border-[#01696f] rounded-sm text-sm text-[#28251d] placeholder:text-[#7a7974]/55 focus:outline-none transition-all duration-200 ${
           error ? "border-rose-400 focus:border-rose-600" : ""
         } ${className}`}
         {...props}
@@ -143,9 +135,6 @@ export const Input: React.FC<InputProps> = ({
   );
 };
 
-// =========================================================================
-// TEXTAREA FIELD COMPONENT
-// =========================================================================
 interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;
   error?: string;
@@ -162,14 +151,14 @@ export const TextArea: React.FC<TextAreaProps> = ({
   return (
     <div className="space-y-1.5 w-full">
       {label && (
-        <label htmlFor={id} className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+        <label htmlFor={id} className="block text-xs font-medium text-[#7a7974]">
           {label}
         </label>
       )}
       <textarea
         id={id}
         rows={rows}
-        className={`w-full px-3.5 py-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-slate-900 rounded-sm text-sm focus:outline-hidden transition-all duration-200 resize-none ${
+        className={`w-full px-3.5 py-2.5 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/22 focus:border-[#01696f] rounded-sm text-sm text-[#28251d] placeholder:text-[#7a7974]/55 focus:outline-none transition-all duration-200 resize-none ${
           error ? "border-rose-400 focus:border-rose-600" : ""
         } ${className}`}
         {...props}
@@ -179,9 +168,6 @@ export const TextArea: React.FC<TextAreaProps> = ({
   );
 };
 
-// =========================================================================
-// SECTION HEADER COMPONENT
-// =========================================================================
 interface SectionHeaderProps extends React.HTMLAttributes<HTMLDivElement> {
   title: string;
   subtitle?: string;
@@ -196,10 +182,13 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
   ...props
 }) => {
   return (
-    <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-150 ${className}`} {...props}>
+    <div
+      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#28251d]/10 ${className}`}
+      {...props}
+    >
       <div className="space-y-1">
-        <h2 className="text-base font-semibold text-slate-900 tracking-tight">{title}</h2>
-        {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+        <h2 className="text-base font-semibold text-[#28251d] tracking-tight">{title}</h2>
+        {subtitle && <p className="text-sm text-[#7a7974]">{subtitle}</p>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>

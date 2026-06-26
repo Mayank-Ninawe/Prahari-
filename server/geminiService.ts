@@ -6,18 +6,21 @@ dotenv.config();
 // Ensure the API key exists or fallback gracefully
 const apiKey = process.env.GEMINI_API_KEY;
 
-let ai: GoogleGenAI | null = null;
-
-if (apiKey) {
-  ai = new GoogleGenAI({
-    apiKey: apiKey,
+export function getAIClient(customKey?: string): GoogleGenAI | null {
+  const key = customKey || process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  return new GoogleGenAI({
+    apiKey: key,
     httpOptions: {
       headers: {
         "User-Agent": "aistudio-build",
       },
     },
   });
-} else {
+}
+
+let ai = getAIClient();
+if (!ai) {
   console.warn("GEMINI_API_KEY is not defined in environment variables. Gemini features will run in mock/fallback mode.");
 }
 
@@ -172,9 +175,11 @@ export const GeminiService = {
       priority: string;
     },
     currentTime: string = new Date().toISOString(),
-    userContext?: { workStyle?: string; aggressiveness?: string; timezone?: string }
+    userContext?: { workStyle?: string; aggressiveness?: string; timezone?: string },
+    customKey?: string
   ): Promise<RiskAssessmentOutput> {
-    if (!ai) {
+    const activeClient = getAIClient(customKey);
+    if (!activeClient) {
       return this.getFallbackRiskAssessment(task, currentTime);
     }
 
@@ -201,7 +206,7 @@ export const GeminiService = {
         Produce a highly precise structured JSON response.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await activeClient.models.generateContent({
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -246,9 +251,11 @@ export const GeminiService = {
     },
     riskAssessment: RiskAssessmentOutput,
     currentTime: string = new Date().toISOString(),
-    userContext?: { workStyle?: string; aggressiveness?: string }
+    userContext?: { workStyle?: string; aggressiveness?: string },
+    customKey?: string
   ): Promise<RescuePlanOutput> {
-    if (!ai) {
+    const activeClient = getAIClient(customKey);
+    if (!activeClient) {
       return this.getFallbackRescuePlan(task);
     }
 
@@ -277,7 +284,7 @@ export const GeminiService = {
         Generate 3 to 5 realistic, step-by-step actions. Provide concrete titles and clear completion instructions. Avoid vague generic text.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await activeClient.models.generateContent({
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -310,9 +317,11 @@ export const GeminiService = {
     },
     originalPlan: RescuePlanOutput,
     remainingTimeContext: string,
-    userContext?: { workStyle?: string; aggressiveness?: string }
+    userContext?: { workStyle?: string; aggressiveness?: string },
+    customKey?: string
   ): Promise<PlanCompressionOutput> {
-    if (!ai) {
+    const activeClient = getAIClient(customKey);
+    if (!activeClient) {
       return this.getFallbackPlanCompression(originalPlan);
     }
 
@@ -335,7 +344,7 @@ export const GeminiService = {
         Structure 2-3 hyper-focused survival steps that guarantee basic functional validation.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await activeClient.models.generateContent({
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -372,9 +381,11 @@ export const GeminiService = {
       deadline: string | Date;
       riskScore?: number;
     }>,
-    currentTime: string = new Date().toISOString()
+    currentTime: string = new Date().toISOString(),
+    customKey?: string
   ): Promise<ReprioritizationOutput> {
-    if (!ai) {
+    const activeClient = getAIClient(customKey);
+    if (!activeClient) {
       return this.getFallbackReprioritization(selectedTask, taskList);
     }
 
@@ -396,7 +407,7 @@ export const GeminiService = {
         Defer non-critical high-effort tasks to later. Output structured IDs in recommended execution order.
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await activeClient.models.generateContent({
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {

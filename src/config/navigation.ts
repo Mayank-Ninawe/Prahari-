@@ -4,36 +4,36 @@ import { LockedRoute } from "./constants";
 export interface NavigationItem {
   name: string;
   path: string;
-  icon: any; // Lucide icon reference
+  icon: any;
   description: string;
 }
 
 export const APP_NAVIGATION: NavigationItem[] = [
   {
-    name: "Rescue Dashboard",
+    name: "Dashboard",
     path: LockedRoute.DASHBOARD,
     icon: LayoutDashboard,
-    description: "Monitor real-time deadline risks and critical task scores.",
+    description: "See what needs attention and what to do next.",
   },
   {
-    name: "Rescue Core",
+    name: "Rescue Plan",
     path: LockedRoute.RESCUE,
     icon: ShieldAlert,
-    description: "Assess risks, compress delivery scopes, and generate AI rescue pathways.",
+    description: "Review risk, get a recovery path, and act before a deadline slips.",
   },
   {
-    name: "Profile & Settings",
+    name: "Settings",
     path: LockedRoute.PROFILE,
     icon: Settings,
-    description: "Manage notification triggers, calendar syncs, and Prahari account.",
+    description: "Manage alerts, preferences, and your account.",
   },
 ];
 
 export const HELP_NAVIGATION: NavigationItem[] = [
   {
-    name: "System Documentation",
+    name: "Help",
     path: "#docs",
     icon: HelpCircle,
-    description: "Learn about the Prahari AI risk assessment methodology.",
+    description: "Learn how Prahari AI helps you stay ahead of deadlines.",
   },
 ];

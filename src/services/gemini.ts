@@ -44,6 +44,17 @@ export interface Reprioritization {
   deferredTaskIds: string[];
 }
 
+function getHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const key = localStorage.getItem("prahari_gemini_api_key");
+  if (key) {
+    headers["x-gemini-api-key"] = key;
+  }
+  return headers;
+}
+
 export const GeminiService = {
   /**
    * Assesses deadline risks given a user task payload.
@@ -62,9 +73,7 @@ export const GeminiService = {
     try {
       const response = await fetch("/api/rescue/assess-risk", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           task,
           currentTime: new Date().toISOString(),
@@ -115,9 +124,7 @@ export const GeminiService = {
     try {
       const response = await fetch("/api/rescue/generate-plan", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           task,
           riskAssessment,
@@ -190,9 +197,7 @@ export const GeminiService = {
     try {
       const response = await fetch("/api/rescue/compress-plan", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           task,
           originalPlan,
@@ -252,9 +257,7 @@ export const GeminiService = {
     try {
       const response = await fetch("/api/rescue/reprioritize", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: getHeaders(),
         body: JSON.stringify({
           selectedTask,
           taskList,
