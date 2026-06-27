@@ -18,19 +18,90 @@ import {
   Trash2,
   X,
   Bell,
+  Zap,
+  AlertTriangle,
+  TrendingUp,
 } from "lucide-react";
 import { LockedRoute } from "@/config/constants";
 import { useAuth } from "@/components/ui/ProtectedRoute";
 import { FirebaseService, TaskDocument } from "../../services/firebaseService";
 import { GeminiService } from "../../services/gemini";
-import { NotificationService, NotificationDocument } from "../../services/notificationService";
+import { NotificationService, NotificationDocument, ReminderDecisionContext } from "../../services/notificationService";
 import { DemoService } from "../../services/demoService";
+import { rankTasks, RankedTask } from "../../utils/prioritization";
+
+const parseDateToMillis = (d: any): number => {
+  if (!d) return 0;
+  if (d instanceof Date) return d.getTime();
+  if (typeof d === "string") return new Date(d).getTime();
+  if (d && typeof d === "object") {
+    if (typeof d.toDate === "function") return d.toDate().getTime();
+    if (typeof d.seconds === "number") return d.seconds * 1000;
+  }
+  return new Date(d).getTime();
+};
+
+const sortTasksSafely = (tasksList: TaskDocument[]): RankedTask[] => {
+  return rankTasks(tasksList);
+};
+
+function reconcileTasks(
+  current: TaskDocument[],
+  incoming: TaskDocument[],
+  tempToRealMap: Record<string, string>
+): RankedTask[] {
+  const result: TaskDocument[] = [...current];
+
+  for (const inc of incoming) {
+    const existingIndex = result.findIndex((item) => {
+      if (item.taskId === inc.taskId) return true;
+
+      // Reconciled ID match
+      if (item.taskId.startsWith("temp_") && tempToRealMap[item.taskId] === inc.taskId) {
+        return true;
+      }
+      if (inc.taskId.startsWith("temp_") && tempToRealMap[inc.taskId] === item.taskId) {
+        return true;
+      }
+
+      // Fuzzy attribute match for active temp tasks (deadline, title, category)
+      if (item.taskId.startsWith("temp_") && !inc.taskId.startsWith("temp_")) {
+        const itemTime = parseDateToMillis(item.deadline);
+        const incTime = parseDateToMillis(inc.deadline);
+        if (
+          item.title === inc.title &&
+          item.category === inc.category &&
+          Math.abs(itemTime - incTime) < 60000
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    if (existingIndex > -1) {
+      const existingItem = result[existingIndex];
+      // Keep real task attributes but favor incoming from server/cache
+      const taskId = !inc.taskId.startsWith("temp_") ? inc.taskId : existingItem.taskId;
+      result[existingIndex] = {
+        ...existingItem,
+        ...inc,
+        taskId,
+      };
+    } else {
+      result.push(inc);
+    }
+  }
+
+  return sortTasksSafely(result);
+}
 
 export function DashboardPage() {
   const { firebaseUser, userDoc } = useAuth();
   const navigate = useNavigate();
 
-  const [tasks, setTasks] = React.useState<TaskDocument[]>([]);
+  const [tasks, setTasks] = React.useState<RankedTask[]>([]);
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string>("");
 
@@ -42,6 +113,7 @@ export function DashboardPage() {
   const [deadline, setDeadline] = React.useState("");
   const [estimatedMinutes, setEstimatedMinutes] = React.useState(120);
   const [priority, setPriority] = React.useState("high");
+  const [prerequisiteTaskId, setPrerequisiteTaskId] = React.useState("");
   const [taskToDelete, setTaskToDelete] = React.useState<string | null>(null);
 
   const [isDemoSandboxOpen, setIsDemoSandboxOpen] = React.useState(false);
@@ -52,6 +124,38 @@ export function DashboardPage() {
   const [loadingNotifications, setLoadingNotifications] = React.useState(false);
   const [nudgeClosed, setNudgeClosed] = React.useState(false);
   const [permissionState, setPermissionState] = React.useState<NotificationPermission>("default");
+
+  const [recommendationsData, setRecommendationsData] = React.useState<any>(null);
+  const [loadingRecommendations, setLoadingRecommendations] = React.useState<boolean>(false);
+
+  const loadRecommendations = async (taskList: any[]) => {
+    if (!taskList || taskList.length === 0) {
+      setRecommendationsData(null);
+      return;
+    }
+    try {
+      setLoadingRecommendations(true);
+      const result = await GeminiService.getPersonalizedRecommendations(taskList, {
+        workStyle: userDoc?.workStyle,
+        aggressiveness: userDoc?.aggressiveness
+      });
+      setRecommendationsData(result);
+    } catch (err) {
+      console.error("Failed to load recommendations:", err);
+    } finally {
+      setLoadingRecommendations(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (tasks && tasks.length > 0) {
+      loadRecommendations(tasks);
+    } else {
+      setRecommendationsData(null);
+    }
+  }, [tasks]);
+
+  const tempToRealMapRef = React.useRef<Record<string, string>>({});
 
   React.useEffect(() => {
     setPermissionState(NotificationService.getPermissionState());
@@ -64,7 +168,7 @@ export function DashboardPage() {
       if (prev.some((t) => t.taskId === tempTask.taskId)) {
         return prev;
       }
-      return [tempTask, ...prev];
+      return rankTasks([tempTask, ...prev]);
     });
   };
 
@@ -74,19 +178,21 @@ export function DashboardPage() {
       const hasReal = prev.some((t) => t.taskId === realId && t.taskId !== tempId);
 
       if (hasReal) {
-        return prev.filter((t) => t.taskId !== tempId);
+        return rankTasks(prev.filter((t) => t.taskId !== tempId));
       }
 
-      return prev.map((t) => {
-        if (t.taskId === tempId) {
-          if (typeof realTaskOrId === "string") {
-            return { ...t, taskId: realId };
-          } else {
-            return realTaskOrId;
+      return rankTasks(
+        prev.map((t) => {
+          if (t.taskId === tempId) {
+            if (typeof realTaskOrId === "string") {
+              return { ...t, taskId: realId };
+            } else {
+              return realTaskOrId;
+            }
           }
-        }
-        return t;
-      });
+          return t;
+        })
+      );
     });
   };
 
@@ -154,11 +260,7 @@ export function DashboardPage() {
       // 1. Instant optimistic load from local cache
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
       if (cached && cached.length > 0) {
-        setTasks((prev) => {
-          const temps = prev.filter((t) => t.taskId.startsWith("temp_"));
-          const merged = [...temps, ...cached.filter((c) => !temps.some((t) => t.taskId === c.taskId))];
-          return merged;
-        });
+        setTasks((prev) => reconcileTasks(prev, cached, tempToRealMapRef.current));
         setLoading(false); // Remove loading state immediately
       } else {
         setLoading(true);
@@ -168,13 +270,7 @@ export function DashboardPage() {
       
       // 2. Fetch fresh data from Firestore in the background
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks((prev) => {
-        const temps = prev.filter((t) => t.taskId.startsWith("temp_"));
-        const filteredFetched = fetchedTasks.filter(
-          (ft) => !temps.some((t) => t.taskId === ft.taskId)
-        );
-        return [...temps, ...filteredFetched];
-      });
+      setTasks((prev) => reconcileTasks(prev, fetchedTasks, tempToRealMapRef.current));
       
       // 3. Load notifications based on fresh tasks
       loadNotifications(firebaseUser.uid, fetchedTasks);
@@ -195,14 +291,15 @@ export function DashboardPage() {
       setDemoMessage("Demo tasks loaded successfully.");
       
       // Instant update from cache instead of waiting for Firestore
-      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
-      setTimeout(() => setDemoMessage(""), 6000);
+      const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
+      setTasks(cached);
+      loadNotifications(firebaseUser.uid, cached);
       
       // Still trigger a background reload to ensure sync eventually settles
-      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
-        setTasks(fresh);
-        loadNotifications(firebaseUser.uid, fresh);
-      }).catch(console.error);
+      const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
+      setTasks(fresh);
+      loadNotifications(firebaseUser.uid, fresh);
+      setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
       console.error("Demo seeding failed:", err);
       setError("We couldn’t load the demo tasks right now.");
@@ -220,14 +317,15 @@ export function DashboardPage() {
       setDemoMessage("Demo tasks cleared.");
       
       // Instant update from cache
-      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
-      setTimeout(() => setDemoMessage(""), 6000);
+      const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
+      setTasks(cached);
+      loadNotifications(firebaseUser.uid, cached);
       
       // Still trigger background reload
-      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
-        setTasks(fresh);
-        loadNotifications(firebaseUser.uid, fresh);
-      }).catch(console.error);
+      const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
+      setTasks(fresh);
+      loadNotifications(firebaseUser.uid, fresh);
+      setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
       console.error("Demo reset failed:", err);
       setError("We couldn’t clear the demo tasks right now.");
@@ -269,7 +367,7 @@ export function DashboardPage() {
         }
       );
 
-      await FirebaseService.updateTask(firebaseUser.uid, task.taskId, {
+      const updatedFields = {
         riskScore: assessmentResult.riskScore,
         riskLevel: assessmentResult.riskLevel,
         riskReasonSummary: assessmentResult.riskReasonSummary,
@@ -280,9 +378,14 @@ export function DashboardPage() {
             : assessmentResult.recommendedMode === "rescue"
             ? "Needs rescue plan"
             : "Stay on track",
-      });
+      };
 
-      await loadTasks();
+      await FirebaseService.updateTask(firebaseUser.uid, task.taskId, updatedFields);
+
+      // Update local state instantly so there's no layout flashing or network lag
+      setTasks((prev) =>
+        prev.map((t) => (t.taskId === task.taskId ? { ...t, ...updatedFields } : t))
+      );
     } catch (err: any) {
       console.error("Manual reassessment failed:", err);
       setError("AI reassessment failed. Please check your Gemini setup and try again.");
@@ -307,6 +410,7 @@ export function DashboardPage() {
     const currentDeadline = deadline;
     const currentEstimatedMinutes = Number(estimatedMinutes);
     const currentPriority = priority;
+    const currentPrerequisiteTaskId = prerequisiteTaskId;
 
     const tempId = `temp_${Date.now()}`;
     const optimisticTask: TaskDocument = {
@@ -328,6 +432,7 @@ export function DashboardPage() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       source: "manual",
+      prerequisiteTaskId: currentPrerequisiteTaskId || undefined,
     };
 
     setIsSubmitting(true);
@@ -344,6 +449,10 @@ export function DashboardPage() {
     setDeadline("");
     setEstimatedMinutes(120);
     setPriority("high");
+    setPrerequisiteTaskId("");
+
+    // Reset submission lock instantly so users can perform other actions/adds without blocks
+    setIsSubmitting(false);
 
     // 3. Save to Firebase in the background
     FirebaseService.createTask(firebaseUser.uid, {
@@ -353,9 +462,12 @@ export function DashboardPage() {
       deadline: new Date(currentDeadline),
       estimatedMinutes: currentEstimatedMinutes,
       priority: currentPriority,
-    })
+      prerequisiteTaskId: currentPrerequisiteTaskId || undefined,
+    }, tempId)
       .then(async (realId) => {
-        setIsSubmitting(false);
+        // Record tempId to realId mapping
+        tempToRealMapRef.current[tempId] = realId;
+
         // Reconcile temp task with real task ID
         onTaskCreateSuccess(tempId, realId);
 
@@ -393,9 +505,10 @@ export function DashboardPage() {
           // Update task in local state with assessment result
           setTasks((prev) =>
             prev.map((t) => {
-              if (t.taskId === realId) {
+              if (t.taskId === realId || t.taskId === tempId) {
                 return {
                   ...t,
+                  taskId: realId,
                   riskScore: assessmentResult.riskScore,
                   riskLevel: assessmentResult.riskLevel,
                   riskReasonSummary: assessmentResult.riskReasonSummary,
@@ -416,7 +529,6 @@ export function DashboardPage() {
         }
       })
       .catch((err: any) => {
-        setIsSubmitting(false);
         setError("We couldn’t save this task to the server. Rolling back.");
         console.error("Error creating task in background:", err);
         // Rollback optimistic task
@@ -432,18 +544,21 @@ export function DashboardPage() {
 
   const confirmDeleteTask = async () => {
     if (!taskToDelete || !firebaseUser) return;
+    const targetId = taskToDelete;
+
+    // Close delete modal instantly
+    setTaskToDelete(null);
+
+    // Instantly remove task from state
+    setTasks((prev) => prev.filter((t) => t.taskId !== targetId));
+
     try {
-      setLoading(true);
-      setError("");
-      await FirebaseService.deleteTask(firebaseUser.uid, taskToDelete);
-      const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fetchedTasks);
+      await FirebaseService.deleteTask(firebaseUser.uid, targetId);
     } catch (err: any) {
       console.error("Error deleting task:", err);
-      setError("Failed to delete task. Please try again.");
-    } finally {
-      setTaskToDelete(null);
-      setLoading(false);
+      setError("Failed to delete task. Rolling back.");
+      // Rollback delete on failure by reloading tasks from cache/server
+      loadTasks();
     }
   };
 
@@ -453,13 +568,14 @@ export function DashboardPage() {
       setLoading(true);
       await DemoService.seedDemoWorkspace(firebaseUser.uid);
       // Instant update from cache
-      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
+      const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
+      setTasks(cached);
+      loadNotifications(firebaseUser.uid, cached);
       
       // Background load
-      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
-        setTasks(fresh);
-        loadNotifications(firebaseUser.uid, fresh);
-      }).catch(console.error);
+      const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
+      setTasks(fresh);
+      loadNotifications(firebaseUser.uid, fresh);
     } catch (err) {
       console.error("Error seeding demo tasks:", err);
     } finally {
@@ -468,7 +584,7 @@ export function DashboardPage() {
   };
 
   const criticalTasksCount = tasks.filter(
-    (t) => t.priority === "critical" || t.priority === "high"
+    (t) => t.computedScore >= 60 && t.status !== "completed" && t.status !== "mitigated" && t.status !== "COMPLETED"
   ).length;
 
   const totalEstimatedMinutes = tasks.reduce(
@@ -481,10 +597,11 @@ export function DashboardPage() {
     (t) => t.status === "completed" || t.status === "mitigated"
   ).length;
 
-  const spotlightTask =
-    tasks.find((t) => t.priority === "critical") ||
-    tasks.find((t) => t.priority === "high") ||
-    tasks[0];
+  const spotlightTask = tasks[0];
+
+  const spotlightReminderCtx = spotlightTask 
+    ? NotificationService.calculateTaskReminderContext(spotlightTask, tasks) 
+    : null;
 
   const formatDeadlineDate = (deadlineVal: any) => {
     if (!deadlineVal) return "";
@@ -740,6 +857,163 @@ export function DashboardPage() {
       </section>
 
       {/* =========================================================================
+          ADAPTIVE RECOMMENDATIONS SECTION
+          ========================================================================= */}
+      {tasks.length > 0 && (
+        <section id="adaptive-behavioral-recommendations" className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-[#28251d]/12">
+            <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+              Adaptive behavioral insights
+            </h4>
+            {loadingRecommendations && (
+              <span className="text-[10px] font-mono text-[#01696f] animate-pulse flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-[#01696f] animate-ping"></span>
+                Recalculating signals...
+              </span>
+            )}
+          </div>
+
+          {recommendationsData ? (
+            <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-6 relative overflow-hidden transition-all">
+              <div className="absolute top-0 left-0 w-full h-1 bg-[#01696f]"></div>
+              
+              {/* Pattern Badge + Analysis Description */}
+              <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-[#fcfbf9] border border-[#28251d]/6 p-4 rounded-sm">
+                <div className="space-y-2 text-left">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[#01696f]" />
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+                      Detected behavioral pattern
+                    </span>
+                    <span className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-sm tracking-wide ${
+                      recommendationsData.detectedPattern === "OVERLOADED"
+                        ? "bg-rose-100 text-rose-800 border border-rose-200"
+                        : recommendationsData.detectedPattern === "DEADLINE_PRESSURE"
+                        ? "bg-amber-100 text-amber-800 border border-amber-200"
+                        : recommendationsData.detectedPattern === "PROCRASTINATING"
+                        ? "bg-indigo-100 text-indigo-800 border border-indigo-200"
+                        : recommendationsData.detectedPattern === "CATEGORY_RISK"
+                        ? "bg-orange-100 text-orange-800 border border-orange-200"
+                        : recommendationsData.detectedPattern === "UNDERESTIMATING"
+                        ? "bg-red-100 text-red-800 border border-red-200"
+                        : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                    }`}>
+                      {recommendationsData.detectedPattern}
+                    </span>
+                  </div>
+                  <p className="font-serif text-lg text-[#28251d] font-bold tracking-tight">
+                    {recommendationsData.patternAnalysis}
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-1.5 shrink-0 bg-white border border-[#28251d]/8 p-2.5 rounded-sm">
+                  <span className="text-2xl font-serif font-extrabold text-[#01696f]">{recommendationsData.patternConfidence}%</span>
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#7a7974] leading-none block">Signal<br/>confidence</span>
+                </div>
+              </div>
+
+              {/* Recommendations Items List */}
+              <div className="grid md:grid-cols-2 gap-4 text-left">
+                {recommendationsData.recommendations?.map((rec: any) => {
+                  const isCritical = rec.urgency === "critical";
+                  const isWarning = rec.urgency === "warning";
+                  
+                  return (
+                    <div 
+                      key={rec.id} 
+                      className={`border rounded-sm p-5 space-y-4 flex flex-col justify-between transition-all ${
+                        isCritical 
+                          ? "bg-rose-50/20 border-rose-200/60 hover:border-rose-300" 
+                          : isWarning 
+                          ? "bg-amber-50/10 border-amber-200/60 hover:border-amber-300" 
+                          : "bg-[#fcfbf9]/40 border-[#28251d]/10 hover:border-[#28251d]/20"
+                      }`}
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm ${
+                            isCritical 
+                              ? "bg-rose-100 text-rose-800" 
+                              : isWarning 
+                              ? "bg-amber-100 text-amber-800" 
+                              : "bg-blue-100 text-blue-800"
+                          }`}>
+                            {rec.urgency} Action
+                          </span>
+                          {rec.category && (
+                            <span className="text-[10px] font-mono text-[#7a7974] font-medium">
+                              Category: {rec.category}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="space-y-1 text-left">
+                          <h5 className="font-serif text-base font-bold text-[#28251d] tracking-tight flex items-center gap-1.5">
+                            {isCritical && <Zap className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
+                            {rec.title}
+                          </h5>
+                          <p className="text-xs text-[#7a7974] leading-relaxed">
+                            {rec.description}
+                          </p>
+                        </div>
+
+                        {/* High Pressure Consequence Section */}
+                        <div className={`p-3 rounded-sm text-[11px] leading-relaxed flex gap-2 border text-left ${
+                          isCritical
+                            ? "bg-rose-50 border-rose-100 text-rose-900"
+                            : isWarning
+                            ? "bg-amber-50 border-amber-100 text-amber-900"
+                            : "bg-neutral-50 border-neutral-100 text-neutral-800"
+                        }`}>
+                          <AlertTriangle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                            isCritical ? "text-rose-600" : isWarning ? "text-amber-600" : "text-neutral-500"
+                          }`} />
+                          <div>
+                            <span className="font-mono font-bold uppercase tracking-wider block text-[9px] opacity-80 mb-0.5">Risk of inaction</span>
+                            {rec.riskOfIgnoring}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (rec.actionRoute === "rescue" && rec.associatedTaskId) {
+                            navigate(LockedRoute.RESCUE, { state: { taskId: rec.associatedTaskId } });
+                          } else if (rec.actionRoute === "profile") {
+                            navigate(LockedRoute.PROFILE);
+                          } else if (rec.actionRoute === "add_task") {
+                            setIsFormOpen(true);
+                          } else {
+                            const el = document.getElementById("active-target-and-actions");
+                            if (el) el.scrollIntoView({ behavior: "smooth" });
+                          }
+                        }}
+                        className={`w-full py-2 px-3 text-center text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none ${
+                          isCritical
+                            ? "bg-rose-600 hover:bg-rose-700 text-white shadow-xs"
+                            : isWarning
+                            ? "bg-amber-600 hover:bg-amber-700 text-white shadow-xs"
+                            : "bg-[#01696f] hover:bg-[#005156] text-white shadow-xs"
+                        }`}
+                      >
+                        <span>{rec.actionLabel}</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-8 text-center flex flex-col items-center justify-center space-y-3">
+              <span className="w-5 h-5 border-2 border-[#01696f] border-t-transparent rounded-full animate-spin"></span>
+              <p className="text-xs text-[#7a7974] font-mono text-center">Conducting behavioral pipeline audit...</p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* =========================================================================
           ZONE 3: SPOTLIGHT + NEXT ACTIONS
           ========================================================================= */}
       {tasks.length > 0 && (
@@ -763,21 +1037,96 @@ export function DashboardPage() {
                     </h3>
                   </div>
 
-                  <div className="self-start sm:self-auto flex items-center gap-1.5">
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        spotlightTask.priority === "critical"
-                          ? "bg-[#dc2626] animate-ping"
-                          : "bg-[#d97706]"
-                      }`}
-                    ></span>
-                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
-                      {spotlightTask.priority} priority
-                    </span>
+                  <div className="self-start sm:self-auto flex flex-col items-end gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          spotlightTask.computedScore >= 75
+                            ? "bg-[#dc2626] animate-pulse"
+                            : "bg-[#d97706]"
+                        }`}
+                      ></span>
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+                        Priority score: <span className="text-[#01696f] font-extrabold">{spotlightTask.computedScore} pts</span>
+                      </span>
+                    </div>
+                    {spotlightTask.isBlocked && (
+                      <span className="text-[9px] font-mono font-bold uppercase tracking-wide bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded-sm">
+                        Blocked
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm text-[#7a7974]">
+                {spotlightReminderCtx && spotlightReminderCtx.level !== "low" && (
+                  <div className={`p-4 rounded-sm border flex flex-col gap-2.5 ${
+                    spotlightReminderCtx.level === "critical"
+                      ? "bg-rose-50 border-rose-200 text-rose-900 shadow-xs"
+                      : spotlightReminderCtx.level === "high"
+                      ? "bg-amber-50 border-amber-200 text-amber-900 shadow-xs"
+                      : "bg-[#f9f8f5] border-[#28251d]/8 text-neutral-800"
+                  }`}>
+                    <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest font-extrabold">
+                      <span className={`w-2.5 h-2.5 rounded-full ${
+                        spotlightReminderCtx.level === "critical"
+                          ? "bg-rose-600 animate-pulse"
+                          : spotlightReminderCtx.level === "high"
+                          ? "bg-amber-500 animate-pulse"
+                          : "bg-amber-400"
+                      }`}></span>
+                      {spotlightReminderCtx.level === "critical" 
+                        ? "🚨 CRITICAL ADAPTIVE REMINDER" 
+                        : spotlightReminderCtx.level === "high"
+                        ? "⚠️ URGENT ADAPTIVE REMINDER"
+                        : "🕒 ADAPTIVE INACTION WATCH"}
+                      <span className="ml-auto font-bold opacity-85">Signal Score: {spotlightReminderCtx.score}/100</span>
+                    </div>
+                    
+                    <div className="space-y-1.5 text-xs">
+                      <p className="font-bold text-sm leading-snug">
+                        {spotlightReminderCtx.reason}
+                      </p>
+                      <div className="opacity-95 leading-relaxed font-mono text-[11px] bg-white/60 p-3 rounded-sm border border-black/5">
+                        <span className="text-[#01696f] font-bold">NEXT BEST ACTION:</span> {spotlightReminderCtx.nextBestAction}
+                      </div>
+                    </div>
+
+                    {spotlightReminderCtx.lastReminderFiredAt && (
+                      <div className="text-[9px] font-mono opacity-60 text-right">
+                        Last notification dispatched: {new Date(spotlightReminderCtx.lastReminderFiredAt).toLocaleTimeString()}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="p-3.5 bg-[#01696f]/5 border border-[#01696f]/12 rounded-sm space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <Target className="w-4 h-4 text-[#01696f] shrink-0" />
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#01696f]">
+                      Primary Priority Reason:
+                    </span>
+                  </div>
+                  <p className="text-sm font-semibold text-[#28251d] pl-5">
+                    {spotlightTask.primaryReason}
+                  </p>
+                </div>
+
+                {spotlightTask.priorityReasons && spotlightTask.priorityReasons.length > 0 && (
+                  <div className="text-xs text-[#7a7974] space-y-1.5 pl-1.5 pt-1">
+                    <span className="font-mono font-bold text-[10px] uppercase tracking-wider text-[#28251d] block">
+                      Prioritization Drivers:
+                    </span>
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 list-disc pl-4 text-[11px]">
+                      {spotlightTask.priorityReasons.map((reason, idx) => (
+                        <li key={idx} className="text-[#55534e]">
+                          {reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm text-[#7a7974] pt-2">
                   <div className="space-y-0.5">
                     <span className="text-[10px] font-mono uppercase tracking-widest text-[#7a7974]/80">Due</span>
                     <p className="font-semibold text-[#28251d] flex items-center gap-1.5">
@@ -800,6 +1149,58 @@ export function DashboardPage() {
                     </p>
                   </div>
                 </div>
+
+                {spotlightTask.selectedPlanId && (
+                  <div className="p-4 bg-amber-500/5 border border-amber-500/15 rounded-sm space-y-3.5 text-sm">
+                    <div className="flex items-center justify-between border-b border-amber-500/10 pb-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+                        <ShieldAlert className="w-4 h-4 shrink-0" />
+                        ACTIVE RESCUE PATH ACTIVE
+                      </div>
+                      <span className="text-[10px] font-mono font-bold bg-amber-500/15 text-amber-800 px-2 py-0.5 rounded-sm">
+                        MVT ALIGNED
+                      </span>
+                    </div>
+
+                    {spotlightTask.survivalGoal && (
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-mono font-semibold text-[#7a7974] uppercase tracking-wider block">
+                          Minimum Viable Outcome (MVT)
+                        </span>
+                        <p className="text-sm font-semibold text-[#28251d]">
+                          {spotlightTask.survivalGoal}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1.5">
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-mono font-semibold text-[#7a7974] uppercase tracking-wider block">
+                          Immediate Next Step
+                        </span>
+                        <p className="text-sm font-medium text-[#01696f] flex items-center gap-1.5">
+                          <span className="inline-block w-2 h-2 rounded-full bg-[#01696f] animate-pulse"></span>
+                          {spotlightTask.nextActionLabel || "Commence execution"}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center text-[10px] font-mono font-semibold text-[#7a7974] uppercase tracking-wider">
+                          <span>Progress</span>
+                          <span className="text-[#01696f]">
+                            {spotlightTask.completedStepsCount || 0}/{spotlightTask.totalStepsCount || 0} ({spotlightTask.progressPercentage || 0}%)
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-[#28251d]/5 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-[#01696f] h-full transition-all duration-300"
+                            style={{ width: `${spotlightTask.progressPercentage || 0}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {spotlightTask.riskReasonSummary ? (
                   <div className="p-3 bg-[#f9f8f5] border border-[#28251d]/8 rounded-sm space-y-2 text-sm">
@@ -869,7 +1270,7 @@ export function DashboardPage() {
             {tasks.length > 1 && (
               <div className="pt-2 space-y-2">
                 <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] block">
-                  Other tasks ({tasks.length - 1})
+                  Other ranked tasks ({tasks.length - 1})
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {tasks
@@ -878,12 +1279,27 @@ export function DashboardPage() {
                     .map((t) => (
                       <div
                         key={t.taskId}
-                        className="bg-white border border-[#28251d]/8 shadow-xs p-3.5 rounded-sm flex items-center justify-between gap-3 text-sm"
+                        className="bg-white border border-[#28251d]/8 shadow-xs p-3.5 rounded-sm flex items-center justify-between gap-3 text-sm relative"
                       >
-                        <div className="space-y-0.5 min-w-0">
-                          <p className="font-semibold text-[#28251d] line-clamp-1">
-                            {t.title}
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-semibold text-[#28251d] line-clamp-1">
+                              {t.title}
+                            </p>
+                            <span className="text-[9px] font-mono font-bold bg-[#01696f]/10 text-[#01696f] px-1.5 py-0.5 rounded-sm shrink-0">
+                              {t.computedScore} pts
+                            </span>
+                            {t.isBlocked && (
+                              <span className="text-[8px] font-mono font-bold bg-rose-100 text-rose-800 px-1 py-0.2 rounded-sm shrink-0">
+                                Blocked
+                              </span>
+                            )}
+                          </div>
+                          
+                          <p className="text-[11px] text-[#01696f] font-medium line-clamp-1">
+                            {t.primaryReason}
                           </p>
+
                           <p className="text-[11px] text-[#7a7974]">
                             {t.category} · {formatDeadlineDate(t.deadline)}
                           </p>
@@ -891,7 +1307,7 @@ export function DashboardPage() {
                         <Link
                           to={LockedRoute.RESCUE}
                           state={{ taskId: t.taskId }}
-                          className="p-1.5 hover:bg-[#f3f0ec] rounded-full text-[#01696f]"
+                          className="p-1.5 hover:bg-[#f3f0ec] rounded-full text-[#01696f] shrink-0 self-center"
                         >
                           <ChevronRight className="w-4 h-4" />
                         </Link>
@@ -1354,6 +1770,29 @@ export function DashboardPage() {
                     className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
                   />
                 </div>
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Prerequisite / Blocker Task (Optional)
+                </label>
+                <select
+                  value={prerequisiteTaskId}
+                  onChange={(e) => setPrerequisiteTaskId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                >
+                  <option value="">-- No Prerequisite --</option>
+                  {tasks
+                    .filter((t) => !t.taskId.startsWith("temp_"))
+                    .map((t) => (
+                      <option key={t.taskId} value={t.taskId}>
+                        {t.title} ({t.category})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[10px] text-[#7a7974] italic pl-1">
+                  If selected, this task will show as Blocked until the prerequisite task is completed.
+                </p>
               </div>
 
               <div className="pt-4 border-t border-[#28251d]/8 flex justify-end gap-3">

@@ -345,10 +345,9 @@ export const DemoService = {
     // 1) Instant UI update first
     buildLocalSeed(uid, scenarios);
 
-    // 2) Firestore sync second (run in background to prevent UI blocking)
-    const runSync = async () => {
-      try {
-        if (!db) return;
+    // 2) Firestore sync second (awaited to ensure data integrity before callback triggers)
+    try {
+      if (!db) return;
 
       const tasksCol = collection(db, "users", uid, "tasks");
       const tasksSnap = await getDocs(tasksCol);
@@ -418,24 +417,21 @@ export const DemoService = {
       }
 
       await commitIfNeeded(true);
-      } catch (error) {
-        if (isOfflineError(error)) return;
-        console.error("Demo seeding Firestore sync failed:", error);
-      }
-    };
-    runSync();
+    } catch (error) {
+      if (isOfflineError(error)) return;
+      console.error("Demo seeding Firestore sync failed:", error);
+      throw error;
+    }
   },
 
   async resetToEmptyWorkspace(uid: string): Promise<void> {
-
     if (typeof window !== "undefined") {
       localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
       localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
     }
 
-    const runReset = async () => {
-      try {
-        if (!db) return;
+    try {
+      if (!db) return;
 
       const tasksCol = collection(db, "users", uid, "tasks");
       const tasksSnap = await getDocs(tasksCol);
@@ -480,11 +476,10 @@ export const DemoService = {
       }
 
       await commitIfNeeded(true);
-      } catch (error) {
-        if (isOfflineError(error)) return;
-        console.error("Demo reset Firestore sync failed:", error);
-      }
-    };
-    runReset();
+    } catch (error) {
+      if (isOfflineError(error)) return;
+      console.error("Demo reset Firestore sync failed:", error);
+      throw error;
+    }
   },
 };

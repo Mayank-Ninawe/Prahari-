@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Copy,
   Download,
+  Calendar,
 } from "lucide-react";
 import { useAuth } from "@/components/ui/ProtectedRoute";
 import {
@@ -30,6 +31,7 @@ import { GeminiService, Reprioritization } from "../../services/gemini";
 import { Card, Badge, Button } from "../../components/ui/BaseComponents";
 import { ExportHelper } from "../../utils/exportHelper";
 import { LockedRoute } from "@/config/constants";
+import { CalendarService } from "../../services/calendarService";
 
 export function RescuePage() {
   const { firebaseUser, userDoc } = useAuth();
@@ -56,6 +58,19 @@ export function RescuePage() {
   const [focusTimerRunning, setFocusTimerRunning] = useState(false);
   const [focusStepTitle, setFocusStepTitle] = useState<string>("");
   const [copiedReport, setCopiedReport] = useState(false);
+
+  // -- Google Calendar Integration States --
+  const [calendarConnected, setCalendarConnected] = useState<boolean>(CalendarService.isConnected());
+  const [checkingCalendar, setCheckingCalendar] = useState<boolean>(false);
+  const [connectingCalendar, setConnectingCalendar] = useState<boolean>(false);
+  const [conflictReport, setConflictReport] = useState<{
+    hasConflict: boolean;
+    conflictingSlots: any[];
+    availableTimeMinutes: number;
+    totalTimeMinutes: number;
+  } | null>(null);
+  const [schedulingBlock, setSchedulingBlock] = useState<boolean>(false);
+  const [calendarMessage, setCalendarMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!firebaseUser) return;
@@ -124,6 +139,127 @@ export function RescuePage() {
     };
     fetchPlans();
   }, [firebaseUser, selectedTaskId, selectedTask?.selectedPlanId]);
+
+  // -- Google Calendar Availability Check and Operations --
+  useEffect(() => {
+    setCalendarConnected(CalendarService.isConnected());
+    if (!CalendarService.isConnected() || !selectedTask) {
+      setConflictReport(null);
+      return;
+    }
+
+    const checkAvailability = async () => {
+      try {
+        setCheckingCalendar(true);
+        const now = new Date();
+        
+        let deadlineDate = new Date();
+        if (selectedTask.deadline) {
+          if (selectedTask.deadline instanceof Date) {
+            deadlineDate = selectedTask.deadline;
+          } else if (typeof (selectedTask.deadline as any).toDate === "function") {
+            deadlineDate = (selectedTask.deadline as any).toDate();
+          } else {
+            deadlineDate = new Date(selectedTask.deadline as any);
+          }
+        }
+
+        // Fetch busy slots between now and deadline
+        const slots = await CalendarService.fetchBusySlots(now.toISOString(), deadlineDate.toISOString());
+        
+        // Analyze conflicts
+        const report = CalendarService.checkConflicts(now, deadlineDate, slots);
+        
+        const totalTimeMinutes = Math.max(0, (deadlineDate.getTime() - now.getTime()) / (1000 * 60));
+
+        setConflictReport({
+          hasConflict: report.hasConflict,
+          conflictingSlots: report.conflictingSlots,
+          availableTimeMinutes: report.availableTimeMinutes,
+          totalTimeMinutes,
+        });
+      } catch (err: any) {
+        console.error("Failed to analyze calendar availability:", err);
+      } finally {
+        setCheckingCalendar(false);
+      }
+    };
+
+    checkAvailability();
+  }, [selectedTask, calendarConnected]);
+
+  const handleConnectCalendarInline = async () => {
+    if (!firebaseUser) return;
+    setConnectingCalendar(true);
+    setCalendarMessage(null);
+    try {
+      await CalendarService.connectCalendar(firebaseUser.uid);
+      setCalendarConnected(true);
+      setCalendarMessage({
+        type: "success",
+        text: "Google Calendar connected successfully! Scanning schedule availability now..."
+      });
+      setTimeout(() => setCalendarMessage(null), 5000);
+    } catch (err: any) {
+      console.error(err);
+      setCalendarMessage({
+        type: "error",
+        text: err.message || "Failed to authorize Google Calendar."
+      });
+    } finally {
+      setConnectingCalendar(false);
+    }
+  };
+
+  const handleScheduleRescueBlock = async () => {
+    if (!selectedTask || !CalendarService.isConnected()) return;
+    setSchedulingBlock(true);
+    setCalendarMessage(null);
+    try {
+      const now = new Date();
+      // Schedule a 90-minute block starting 15 minutes from now
+      const startTime = new Date(now.getTime() + 15 * 60 * 1000);
+      const endTime = new Date(startTime.getTime() + 90 * 60 * 1000);
+
+      const description = `Strategic focus slot booked by Prahari AI.\nTask Title: ${selectedTask.title}\nDescription: ${selectedTask.description || "No description"}\nEffort Required: ${selectedTask.estimatedMinutes} mins.`;
+
+      await CalendarService.createRescueBlock({
+        taskTitle: selectedTask.title,
+        description,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString()
+      });
+
+      setCalendarMessage({
+        type: "success",
+        text: `📅 Successfully scheduled 90-minute rescue slot: ${startTime.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})} - ${endTime.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})}!`
+      });
+
+      // Refetch busy slots to show updated availability metrics instantly
+      const deadlineDate = selectedTask.deadline instanceof Date 
+        ? selectedTask.deadline 
+        : (typeof (selectedTask.deadline as any).toDate === "function" ? (selectedTask.deadline as any).toDate() : new Date(selectedTask.deadline as any));
+      const slots = await CalendarService.fetchBusySlots(now.toISOString(), deadlineDate.toISOString());
+      const report = CalendarService.checkConflicts(now, deadlineDate, slots);
+      const totalTimeMinutes = Math.max(0, (deadlineDate.getTime() - now.getTime()) / (1000 * 60));
+      setConflictReport({
+        hasConflict: report.hasConflict,
+        conflictingSlots: report.conflictingSlots,
+        availableTimeMinutes: report.availableTimeMinutes,
+        totalTimeMinutes,
+      });
+
+      setTimeout(() => setCalendarMessage(null), 8000);
+    } catch (err: any) {
+      console.error(err);
+      setCalendarMessage({
+        type: "error",
+        text: err.message || "Could not schedule focus block."
+      });
+    } finally {
+      setSchedulingBlock(false);
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -241,6 +377,8 @@ export function RescuePage() {
         totalEstimatedMinutes: newPlan.totalEstimatedMinutes,
         firstActionLabel: newPlan.firstActionLabel,
         compressionMode: "not_needed",
+        survivalGoal: newPlan.survivalGoal,
+        droppedOrDeferred: newPlan.droppedOrDeferred,
       };
 
       const planId = await FirebaseService.saveRescuePlan(
@@ -262,6 +400,7 @@ export function RescuePage() {
         progressPercentage: 0,
         completedStepsCount: 0,
         totalStepsCount: newPlan.steps.length,
+        survivalGoal: newPlan.survivalGoal,
       });
 
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
@@ -338,6 +477,7 @@ export function RescuePage() {
         nextActionLabel:
           newCompressedSteps.find((s) => !completedStepIds.includes(s.stepId))?.title ||
           "Continue steps",
+        survivalGoal: compressionResult.survivalGoal,
       });
 
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
@@ -434,6 +574,7 @@ export function RescuePage() {
         progressPercentage: 0,
         completedStepsCount: 0,
         totalStepsCount: totalSteps,
+        survivalGoal: plan.survivalGoal,
       });
 
       if (!plan.completedStepIds) {
@@ -877,6 +1018,141 @@ export function RescuePage() {
                     <p className="text-[#28251d] leading-relaxed">{selectedTask.riskReasonSummary}</p>
                   </div>
                 )}
+
+                {/* Google Calendar Context and Execution Actions */}
+                <div className="border-t border-[#28251d]/8 pt-4 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-[#7a7974]" />
+                      <span className="text-xs font-serif font-bold text-[#28251d]">Google Calendar Integration</span>
+                    </div>
+                    <span className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded-sm border ${
+                      calendarConnected 
+                        ? "text-[#01696f] bg-[#01696f]/5 border-[#01696f]/20" 
+                        : "text-[#7a7974] bg-[#f4f2ea]/60 border-[#28251d]/10"
+                    }`}>
+                      {calendarConnected ? "Connected" : "Inactive"}
+                    </span>
+                  </div>
+
+                  {calendarMessage && (
+                    <div className={`p-3 rounded-sm text-xs border leading-relaxed ${
+                      calendarMessage.type === "success" 
+                        ? "bg-[#01696f]/5 border-[#01696f]/25 text-[#01696f]" 
+                        : "bg-rose-50 border-rose-200 text-rose-800"
+                    }`}>
+                      {calendarMessage.text}
+                    </div>
+                  )}
+
+                  {!calendarConnected ? (
+                    <div className="space-y-3 p-3.5 bg-white border border-[#28251d]/10 rounded-sm">
+                      <p className="text-[12px] text-[#7a7974] leading-relaxed">
+                        Analyze actual calendar availability before your deadline and reserve structured focus slots instantly.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={connectingCalendar}
+                        onClick={handleConnectCalendarInline}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                      >
+                        {connectingCalendar ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Connecting...</span>
+                          </>
+                        ) : (
+                          <span>Connect Google Calendar</span>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5">
+                      {checkingCalendar ? (
+                        <div className="p-4 text-center border border-[#28251d]/10 bg-white rounded-sm space-y-2">
+                          <RefreshCw className="w-4 h-4 text-[#01696f] animate-spin mx-auto" />
+                          <p className="text-[11px] font-mono text-[#7a7974]">Scanning calendar availability metrics...</p>
+                        </div>
+                      ) : conflictReport ? (
+                        <div className="space-y-2.5">
+                          {/* Live stats visualization */}
+                          <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+                            <div className="p-2 bg-white border border-[#28251d]/10 rounded-sm">
+                              <span className="text-[10px] text-[#7a7974] block">Buffer Time</span>
+                              <span className="font-semibold text-[#28251d]">
+                                {(conflictReport.totalTimeMinutes / 60).toFixed(1)}h
+                              </span>
+                            </div>
+                            <div className="p-2 bg-white border border-[#28251d]/10 rounded-sm">
+                              <span className="text-[10px] text-[#7a7974] block">Busy Blocks</span>
+                              <span className="font-semibold text-amber-700">
+                                {((conflictReport.totalTimeMinutes - conflictReport.availableTimeMinutes) / 60).toFixed(1)}h
+                              </span>
+                            </div>
+                            <div className="p-2 bg-[#01696f]/5 border border-[#01696f]/15 rounded-sm">
+                              <span className="text-[10px] text-[#01696f] block">Net Free</span>
+                              <span className="font-bold text-[#01696f]">
+                                {(conflictReport.availableTimeMinutes / 60).toFixed(1)}h
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Analysis and warning logic */}
+                          {conflictReport.availableTimeMinutes < selectedTask.estimatedMinutes ? (
+                            <div className="p-3 bg-rose-50 border border-rose-200 rounded-sm text-xs text-rose-800 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
+                                <AlertTriangle className="w-4 h-4 text-rose-600" /> Availability Squeezed
+                              </div>
+                              <p className="leading-relaxed">
+                                You only have <strong>{(conflictReport.availableTimeMinutes / 60).toFixed(1)} hours</strong> of free time, but this task requires <strong>{(selectedTask.estimatedMinutes / 60).toFixed(1)} hours</strong>. Workload exceeds availability. Activate a <strong>Plan Compression</strong> immediately!
+                              </p>
+                            </div>
+                          ) : conflictReport.hasConflict ? (
+                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-sm text-xs text-amber-900 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
+                                <AlertTriangle className="w-4 h-4 text-amber-600" /> Active Commitments Overlap
+                              </div>
+                              <p className="leading-relaxed">
+                                We detected <strong>{conflictReport.conflictingSlots.length}</strong> calendar commitments before your deadline. Total conflict duration: {((conflictReport.totalTimeMinutes - conflictReport.availableTimeMinutes) / 60).toFixed(1)}h.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-sm text-xs text-emerald-950 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
+                                <ShieldCheck className="w-4 h-4 text-emerald-600" /> Calendar Clear
+                              </div>
+                              <p className="leading-relaxed">
+                                No scheduling commitments are present before your deadline. Net free time is highly sufficient for delivery.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Scheduling trigger */}
+                          <button
+                            type="button"
+                            disabled={schedulingBlock}
+                            onClick={handleScheduleRescueBlock}
+                            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                          >
+                            {schedulingBlock ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Scheduling Block...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Clock className="w-3.5 h-3.5" />
+                                <span>Schedule 90-Min Rescue Block</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-[#7a7974] italic">Could not load schedule availability.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </Card>
 
               <Card className="border border-[#28251d]/10 bg-[#f3f0ec] p-6 space-y-4">
@@ -1126,6 +1402,30 @@ export function RescuePage() {
                       <p className="text-sm text-[#7a7974] leading-relaxed italic bg-white p-3 border border-[#28251d]/10 rounded-sm">
                         “{activePlan.planSummary}”
                       </p>
+
+                      {activePlan.survivalGoal && (
+                        <div className="p-4 bg-amber-500/5 border border-amber-500/15 rounded-sm space-y-2 text-left">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+                            <ShieldAlert className="w-3.5 h-3.5" />
+                            MINIMUM VIABLE OUTCOME (MVT)
+                          </div>
+                          <p className="text-sm font-medium text-[#28251d]">
+                            {activePlan.survivalGoal}
+                          </p>
+                          {activePlan.droppedOrDeferred && activePlan.droppedOrDeferred.length > 0 && (
+                            <div className="text-xs text-[#7a7974] pt-1.5 border-t border-[#28251d]/6">
+                              <span className="font-semibold text-[#28251d]/60 block mb-1">Nice-to-haves cut or deferred to protect deadline:</span>
+                              <div className="flex flex-wrap gap-1.5 mt-1">
+                                {activePlan.droppedOrDeferred.map((item, idx) => (
+                                  <span key={idx} className="bg-white border border-[#28251d]/8 px-2 py-0.5 rounded-sm font-mono text-[10px]">
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       <div className="space-y-3.5">
                         {displaySteps.map((step, idx) => {

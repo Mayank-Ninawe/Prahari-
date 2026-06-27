@@ -33,15 +33,16 @@ const getActiveConfig = (): FirebaseAppletConfig => {
   if (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) activeConfig.messagingSenderId = import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID;
   if (import.meta.env.VITE_FIREBASE_APP_ID) activeConfig.appId = import.meta.env.VITE_FIREBASE_APP_ID;
   if (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID) activeConfig.measurementId = import.meta.env.VITE_FIREBASE_MEASUREMENT_ID;
+  if (import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID) activeConfig.firestoreDatabaseId = import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID;
 
   if (typeof window !== "undefined") {
-    const customApiKey = localStorage.getItem("prahari_firebase_api_key");
-    const customAuthDomain = localStorage.getItem("prahari_firebase_auth_domain");
-    const customProjectId = localStorage.getItem("prahari_firebase_project_id");
-    const customStorageBucket = localStorage.getItem("prahari_firebase_storage_bucket");
-    const customMessagingSenderId = localStorage.getItem("prahari_firebase_messaging_sender_id");
-    const customAppId = localStorage.getItem("prahari_firebase_app_id");
-    const customFirestoreDatabaseId = localStorage.getItem("prahari_firebase_firestore_database_id");
+    const customApiKey = localStorage.getItem("prahari_firebase_api_key")?.trim();
+    const customAuthDomain = localStorage.getItem("prahari_firebase_auth_domain")?.trim();
+    const customProjectId = localStorage.getItem("prahari_firebase_project_id")?.trim();
+    const customStorageBucket = localStorage.getItem("prahari_firebase_storage_bucket")?.trim();
+    const customMessagingSenderId = localStorage.getItem("prahari_firebase_messaging_sender_id")?.trim();
+    const customAppId = localStorage.getItem("prahari_firebase_app_id")?.trim();
+    const customFirestoreDatabaseId = localStorage.getItem("prahari_firebase_firestore_database_id")?.trim();
 
     if (customApiKey) activeConfig.apiKey = customApiKey;
     if (customAuthDomain) activeConfig.authDomain = customAuthDomain;
@@ -69,15 +70,25 @@ if (isConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(activeFirebaseConfig) : getApp();
 
+    // Dynamically resolve firestore database ID
+    let dbId: string | undefined = activeFirebaseConfig.firestoreDatabaseId?.trim();
+    if (!dbId || dbId === "default" || dbId === "(default)") {
+      if (activeFirebaseConfig.projectId === "continual-caster-1k8sk" || !activeFirebaseConfig.projectId) {
+        dbId = "ai-studio-e8eafe06-dd61-4bdd-a8ce-fcc1502df800";
+      } else {
+        dbId = undefined; // standard default database
+      }
+    }
+
     db = initializeFirestore(app, {
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       }),
       ignoreUndefinedProperties: true,
-    }, activeFirebaseConfig.firestoreDatabaseId);
+    }, dbId);
 
     auth = getAuth(app);
-    console.log("Firebase initialized successfully on Prahari AI.");
+    console.log(`Firebase initialized successfully on Prahari AI with database: ${dbId || "(default)"}`);
   } catch (err) {
     console.warn("Firebase initialization failed. Using mock stub mode.", err);
   }

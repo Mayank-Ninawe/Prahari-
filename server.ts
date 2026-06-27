@@ -100,6 +100,28 @@ async function startServer() {
     }
   });
 
+  // Real Personalized Recommendations Endpoint
+  app.post("/api/rescue/recommendations", async (req, res) => {
+    try {
+      const { tasks, currentTime, userContext } = req.body;
+      const customKey = req.headers["x-gemini-api-key"] as string | undefined;
+      if (!tasks || !Array.isArray(tasks)) {
+        return res.status(400).json({ success: false, error: "Tasks list array is required." });
+      }
+      console.log(`[Recommendations Engine] Generating recommendations for ${tasks.length} tasks.`);
+      const recommendations = await GeminiService.generatePersonalizedRecommendations(
+        tasks,
+        currentTime || new Date().toISOString(),
+        userContext,
+        customKey
+      );
+      res.json({ success: true, data: recommendations });
+    } catch (err: any) {
+      console.error("API Error in recommendations:", err);
+      res.status(500).json({ success: false, error: err.message || "Failed to generate recommendations." });
+    }
+  });
+
   // Placeholder: FCM Web Push Token Registration (Phase 1 Placeholder preserved)
   app.post("/api/notifications/register", (req, res) => {
     res.json({

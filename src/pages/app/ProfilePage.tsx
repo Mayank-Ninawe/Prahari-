@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { User, Bell, Calendar, ShieldCheck, ShieldAlert, LogOut, RefreshCw } from "lucide-react";
+import { User, Bell, Calendar, ShieldCheck, ShieldAlert, LogOut, RefreshCw, Check, AlertTriangle, Info, Clock } from "lucide-react";
 import { useAuth } from "@/components/ui/ProtectedRoute";
 import { FirebaseService } from "../../services/firebaseService";
 import { NotificationService } from "../../services/notificationService";
+import { CalendarService, BusySlot } from "../../services/calendarService";
 
 export function ProfilePage() {
   const { firebaseUser, userDoc, refreshUserDoc, logout } = useAuth();
@@ -16,6 +17,12 @@ export function ProfilePage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // -- State: Calendar Sync --
+  const [connectingCalendar, setConnectingCalendar] = useState(false);
+  const [busySlots, setBusySlots] = useState<BusySlot[]>([]);
+  const [loadingBusySlots, setLoadingBusySlots] = useState(false);
+  const [calendarConnected, setCalendarConnected] = useState(CalendarService.isConnected());
 
   // -- State: Notifications --
   const [permissionState, setPermissionState] = useState<NotificationPermission>("default");
@@ -36,6 +43,64 @@ export function ProfilePage() {
       setCalendarSync(userDoc.calendarSync || false);
     }
   }, [userDoc]);
+
+  // Load sample busy slots if connected
+  const loadBusySlots = async () => {
+    if (!CalendarService.isConnected()) return;
+    setLoadingBusySlots(true);
+    try {
+      const now = new Date();
+      const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const slots = await CalendarService.fetchBusySlots(now.toISOString(), tomorrow.toISOString());
+      setBusySlots(slots);
+    } catch (err: any) {
+      console.error("Failed to load sample busy slots:", err);
+      setError(err.message || "Failed to load events. Session might have expired.");
+      setCalendarConnected(false);
+    } finally {
+      setLoadingBusySlots(false);
+    }
+  };
+
+  useEffect(() => {
+    setCalendarConnected(CalendarService.isConnected());
+    if (CalendarService.isConnected()) {
+      loadBusySlots();
+    }
+  }, [calendarSync]);
+
+  const handleConnectCalendar = async () => {
+    if (!firebaseUser) return;
+    setConnectingCalendar(true);
+    setError(null);
+    try {
+      await CalendarService.connectCalendar(firebaseUser.uid);
+      setCalendarConnected(true);
+      setCalendarSync(true);
+      await refreshUserDoc();
+      await loadBusySlots();
+    } catch (err: any) {
+      console.error("Failed to connect Google Calendar:", err);
+      setError(err.message || "Authorization popup was blocked or denied.");
+    } finally {
+      setConnectingCalendar(false);
+    }
+  };
+
+  const handleDisconnectCalendar = async () => {
+    if (!firebaseUser) return;
+    setError(null);
+    try {
+      await CalendarService.disconnectCalendar(firebaseUser.uid);
+      setCalendarConnected(false);
+      setCalendarSync(false);
+      setBusySlots([]);
+      await refreshUserDoc();
+    } catch (err: any) {
+      console.error("Failed to disconnect calendar:", err);
+      setError("Failed to disconnect Google Calendar.");
+    }
+  };
 
   const handleRequestPermission = async () => {
     try {
@@ -82,6 +147,15 @@ export function ProfilePage() {
       setError("Failed to save settings. Please try again.");
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const formatSlotTime = (isoStr: string) => {
+    try {
+      const date = new Date(isoStr);
+      return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return isoStr;
     }
   };
 
@@ -239,22 +313,80 @@ export function ProfilePage() {
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-6 max-w-2xl">
-              <div className="space-y-1.5 flex-1">
+              <div className="space-y-3 flex-1">
                 <label className="text-sm font-serif font-bold text-[#28251d] flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-[#7a7974]" />
                   <span>Google Calendar Sync</span>
                 </label>
                 <p className="text-[13px] text-[#7a7974] leading-relaxed">
-                  Automatically export critical task rescue plans to secure execution slots in your calendar.
+                  Automatically synchronize your workload planning and export critical rescue blocks directly as focus events in your Google Calendar.
                 </p>
-              </div>
-              <div className="pt-1 sm:pt-0">
-                <input
-                  type="checkbox"
-                  checked={calendarSync}
-                  onChange={(e) => setCalendarSync(e.target.checked)}
-                  className="w-5 h-5 text-[#01696f] border-[#28251d]/15 rounded-sm focus:ring-[#01696f] cursor-pointer bg-white"
-                />
+
+                {/* Google Calendar Connection Widget */}
+                <div className="p-4 bg-[#fcfbfa] border border-[#28251d]/10 rounded-sm space-y-4 mt-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${calendarConnected ? "bg-[#01696f] animate-pulse" : "bg-[#8a8880]"}`}></span>
+                      <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-[#28251d]">
+                        {calendarConnected ? "Connected & Active" : "Not Connected"}
+                      </span>
+                    </div>
+
+                    {calendarConnected ? (
+                      <button
+                        type="button"
+                        onClick={handleDisconnectCalendar}
+                        className="px-3 py-1.5 border border-rose-200 hover:border-rose-400 text-rose-700 hover:bg-rose-50 text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm cursor-pointer transition-colors"
+                      >
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={connectingCalendar}
+                        onClick={handleConnectCalendar}
+                        className="px-3 py-1.5 bg-[#01696f] hover:bg-[#005156] text-white text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm cursor-pointer transition-all disabled:opacity-50"
+                      >
+                        {connectingCalendar ? "Connecting..." : "Connect Google Calendar"}
+                      </button>
+                    )}
+                  </div>
+
+                  {calendarConnected && (
+                    <div className="border-t border-[#28251d]/6 pt-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#7a7974] flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" /> Next 24h Commitments
+                        </span>
+                        {loadingBusySlots && (
+                          <span className="text-[9px] font-mono text-[#01696f] animate-pulse">Scanning...</span>
+                        )}
+                      </div>
+
+                      {loadingBusySlots ? (
+                        <div className="h-10 flex items-center justify-center text-xs text-[#7a7974] font-mono">
+                          Retrieving availability...
+                        </div>
+                      ) : busySlots.length === 0 ? (
+                        <div className="p-2.5 bg-[#01696f]/5 border border-[#01696f]/10 rounded-sm text-[11px] text-[#01696f] flex items-center gap-2">
+                          <Check className="w-4 h-4 shrink-0" />
+                          <span>Your calendar is completely clear! Ideal environment for task execution.</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {busySlots.map((slot, i) => (
+                            <div key={i} className="flex justify-between items-center bg-[#f4f2ea]/60 p-2 border border-[#28251d]/8 rounded-sm text-[11px] text-[#28251d]">
+                              <span className="font-medium">Busy Slot {i + 1}</span>
+                              <span className="font-mono text-[10px] text-[#7a7974]">
+                                {formatSlotTime(slot.start)} - {formatSlotTime(slot.end)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

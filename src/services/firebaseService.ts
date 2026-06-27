@@ -56,6 +56,8 @@ export interface TaskDocument {
   progressPercentage?: number;
   completedStepsCount?: number;
   totalStepsCount?: number;
+  prerequisiteTaskId?: string;
+  survivalGoal?: string;
 }
 
 export interface RescuePlanDocument {
@@ -268,12 +270,14 @@ export const FirebaseService = {
       deadline: Date;
       estimatedMinutes: number;
       priority: string;
-    }
+      prerequisiteTaskId?: string;
+    },
+    tempId?: string
   ): Promise<string> {
     const path = `users/${uid}/tasks`;
     const cacheKey = `prahari_tasks_${uid}`;
 
-    const generatedId = "task_" + Math.random().toString(36).substring(2, 11);
+    const generatedId = tempId || "task_" + Math.random().toString(36).substring(2, 11);
     const taskDoc: TaskDocument = {
       taskId: generatedId,
       title: taskInput.title,
@@ -293,6 +297,7 @@ export const FirebaseService = {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       source: "manual",
+      prerequisiteTaskId: taskInput.prerequisiteTaskId || undefined,
     };
 
     // Optimistic cache write — task appears in UI before Firestore confirms
@@ -304,17 +309,11 @@ export const FirebaseService = {
 
       const tasksRef = collection(db, "users", uid, "tasks");
       const newRef = doc(tasksRef);
-      taskDoc.taskId = newRef.id;
-
-      // Update cache with real Firestore ID
-      const refreshed = cacheGet<TaskDocument[]>(cacheKey) ?? [];
-      cacheSet(
-        cacheKey,
-        refreshed.map((t) => (t.taskId === generatedId ? taskDoc : t))
-      );
+      const realId = newRef.id;
 
       const firestoreDoc = stripUndefined({
         ...taskDoc,
+        taskId: realId,
         deadline:
           taskInput.deadline instanceof Date && !isNaN(taskInput.deadline.getTime())
             ? Timestamp.fromDate(taskInput.deadline)
@@ -324,9 +323,22 @@ export const FirebaseService = {
       });
 
       await setDoc(newRef, firestoreDoc);
-      return taskDoc.taskId;
+
+      // Update cache with real Firestore ID only after successful server write
+      const refreshed = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+      const updatedTaskDoc = { ...taskDoc, taskId: realId };
+      cacheSet(
+        cacheKey,
+        refreshed.map((t) => (t.taskId === generatedId ? updatedTaskDoc : t))
+      );
+
+      return realId;
     } catch (error) {
-      if (isOfflineError(error)) return taskDoc.taskId; // Cache already has it
+      // Rollback optimistic cache update on failure
+      const refreshed = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+      cacheSet(cacheKey, refreshed.filter((t) => t.taskId !== generatedId));
+
+      if (isOfflineError(error)) return generatedId;
       return handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -414,8 +426,10 @@ export const FirebaseService = {
     const cacheKey = `prahari_tasks_${uid}`;
     const path = `users/${uid}/tasks/${taskId}`;
 
-    // Optimistic update — UI reflects change instantly
     const cached = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+    const originalTask = cached.find((t) => t.taskId === taskId);
+
+    // Optimistic update — UI reflects change instantly
     cacheSet(
       cacheKey,
       cached.map((t) =>
@@ -428,6 +442,14 @@ export const FirebaseService = {
       const taskRef = doc(db, "users", uid, "tasks", taskId);
       await updateDoc(taskRef, stripUndefined({ ...data, updatedAt: serverTimestamp() }));
     } catch (error) {
+      // Rollback optimistic update on failure
+      if (originalTask) {
+        const refreshed = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+        cacheSet(
+          cacheKey,
+          refreshed.map((t) => (t.taskId === taskId ? originalTask : t))
+        );
+      }
       if (isOfflineError(error)) return;
       return handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -437,8 +459,10 @@ export const FirebaseService = {
     const cacheKey = `prahari_tasks_${uid}`;
     const path = `users/${uid}/tasks/${taskId}`;
 
-    // Optimistic delete
     const cached = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+    const originalTasks = [...cached];
+
+    // Optimistic delete
     cacheSet(cacheKey, cached.filter((t) => t.taskId !== taskId));
 
     try {
@@ -446,6 +470,8 @@ export const FirebaseService = {
       const taskRef = doc(db, "users", uid, "tasks", taskId);
       await deleteDoc(taskRef);
     } catch (error) {
+      // Rollback optimistic delete on failure
+      cacheSet(cacheKey, originalTasks);
       if (isOfflineError(error)) return;
       return handleFirestoreError(error, OperationType.DELETE, path);
     }
