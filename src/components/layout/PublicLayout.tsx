@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, Outlet } from "react-router-dom";
 import { Shield, ArrowRight } from "lucide-react";
-import { LockedRoute } from "../../config/constants";
+import { LockedRoute } from "@/config/constants";
 import { useAuth } from "../ui/ProtectedRoute";
 import { Button } from "../ui/BaseComponents";
 

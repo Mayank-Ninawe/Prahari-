@@ -19,8 +19,8 @@ import {
   X,
   Bell,
 } from "lucide-react";
-import { LockedRoute } from "../../config/constants";
-import { useAuth } from "../../components/ui/ProtectedRoute";
+import { LockedRoute } from "@/config/constants";
+import { useAuth } from "@/components/ui/ProtectedRoute";
 import { FirebaseService, TaskDocument } from "../../services/firebaseService";
 import { GeminiService } from "../../services/gemini";
 import { NotificationService, NotificationDocument } from "../../services/notificationService";
@@ -111,11 +111,22 @@ export function DashboardPage() {
   const loadTasks = async () => {
     if (!firebaseUser) return;
     try {
-      setLoading(true);
+      // 1. Instant optimistic load from local cache
+      const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
+      if (cached && cached.length > 0) {
+        setTasks(cached);
+        setLoading(false); // Remove loading state immediately
+      } else {
+        setLoading(true);
+      }
+      
       setError("");
+      
+      // 2. Fetch fresh data from Firestore in the background
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
       setTasks(fetchedTasks);
-      // Load notifications in background so tasks render immediately
+      
+      // 3. Load notifications based on fresh tasks
       loadNotifications(firebaseUser.uid, fetchedTasks);
     } catch (err: any) {
       setError("We couldn’t load your tasks right now. Please refresh and try again.");
@@ -132,8 +143,16 @@ export function DashboardPage() {
       setDemoMessage("");
       await DemoService.seedDemoWorkspace(firebaseUser.uid);
       setDemoMessage("Demo tasks loaded successfully.");
-      await loadTasks();
+      
+      // Instant update from cache instead of waiting for Firestore
+      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
       setTimeout(() => setDemoMessage(""), 6000);
+      
+      // Still trigger a background reload to ensure sync eventually settles
+      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
+        setTasks(fresh);
+        loadNotifications(firebaseUser.uid, fresh);
+      }).catch(console.error);
     } catch (err) {
       console.error("Demo seeding failed:", err);
       setError("We couldn’t load the demo tasks right now.");
@@ -149,8 +168,16 @@ export function DashboardPage() {
       setDemoMessage("");
       await DemoService.resetToEmptyWorkspace(firebaseUser.uid);
       setDemoMessage("Demo tasks cleared.");
-      await loadTasks();
+      
+      // Instant update from cache
+      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
       setTimeout(() => setDemoMessage(""), 6000);
+      
+      // Still trigger background reload
+      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
+        setTasks(fresh);
+        loadNotifications(firebaseUser.uid, fresh);
+      }).catch(console.error);
     } catch (err) {
       console.error("Demo reset failed:", err);
       setError("We couldn’t clear the demo tasks right now.");
@@ -334,8 +361,14 @@ export function DashboardPage() {
     try {
       setLoading(true);
       await DemoService.seedDemoWorkspace(firebaseUser.uid);
-      const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fetchedTasks);
+      // Instant update from cache
+      setTasks(FirebaseService.getCachedTasks(firebaseUser.uid));
+      
+      // Background load
+      FirebaseService.getUserTasks(firebaseUser.uid).then((fresh) => {
+        setTasks(fresh);
+        loadNotifications(firebaseUser.uid, fresh);
+      }).catch(console.error);
     } catch (err) {
       console.error("Error seeding demo tasks:", err);
     } finally {

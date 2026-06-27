@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { User, Bell, Database, Calendar, ShieldCheck, ShieldAlert, Sparkles, Sliders, CheckCircle2, RefreshCw, Key, Lock } from "lucide-react";
-import { useAuth } from "../../components/ui/ProtectedRoute";
+import { useAuth } from "@/components/ui/ProtectedRoute";
 import { FirebaseService } from "../../services/firebaseService";
 import { NotificationService } from "../../services/notificationService";
 import { Card, Badge, SectionHeader, Button } from "../../components/ui/BaseComponents";

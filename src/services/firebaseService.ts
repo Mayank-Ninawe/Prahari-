@@ -1,16 +1,18 @@
-import { 
-  doc, 
-  setDoc, 
-  getDoc, 
-  updateDoc, 
-  collection, 
-  addDoc, 
-  getDocs, 
-  query, 
-  orderBy, 
+import {
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  collection,
+  getDocs,
+  query,
+  orderBy,
   deleteDoc,
+  onSnapshot,
   serverTimestamp,
-  Timestamp 
+  Timestamp,
+  QuerySnapshot,
+  DocumentData,
 } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "../config/firebase";
 
@@ -86,13 +88,32 @@ export interface RescuePlanDocument {
   source: string;
 }
 
+// ─── Cache Helpers ─────────────────────────────────────────────────────────────
+
+function cacheSet(key: string, value: any): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (_) {}
+}
+
+function cacheGet<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─── Offline Detection ─────────────────────────────────────────────────────────
+
 function isOfflineError(error: any): boolean {
   if (!db) return true;
   if (!error) return false;
   const msg = error.message || String(error);
   return (
-    msg.includes("offline") || 
-    msg.includes("client is offline") || 
+    msg.includes("offline") ||
+    msg.includes("client is offline") ||
     msg.includes("Failed to get") ||
     msg.includes("Failed to query") ||
     msg.includes("uninitialized") ||
@@ -100,184 +121,156 @@ function isOfflineError(error: any): boolean {
   );
 }
 
+// ─── Clean undefined keys from any object before Firestore write ───────────────
+
+function stripUndefined<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined)
+  ) as T;
+}
+
+// ─── Default user builder ──────────────────────────────────────────────────────
+
+function buildDefaultUser(uid: string, email: string, fullName: string): UserDocument {
+  return {
+    uid,
+    fullName: fullName || email.split("@")[0] || "Prahari AI User",
+    email,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    role: "user",
+    workStyle: "",
+    notificationPreferences: { webPush: false, email: false },
+    timezone: "Asia/Kolkata",
+    demoModeEnabled: true,
+  };
+}
+
+// ─── FirebaseService ───────────────────────────────────────────────────────────
+
 export const FirebaseService = {
+
+  // ── USER ──────────────────────────────────────────────────────────────────────
+
   /**
-   * Creates or initializes a user document in users/{uid}
+   * Creates or merges a user document.
+   * Uses setDoc + merge:true — ONE round-trip instead of getDoc → setDoc.
    */
-  async createUserDocument(uid: string, email: string, fullName: string): Promise<UserDocument> {
+  async createUserDocument(
+    uid: string,
+    email: string,
+    fullName: string
+  ): Promise<UserDocument> {
+    const cacheKey = `prahari_user_${uid}`;
     const path = `users/${uid}`;
-    
+
+    const defaultUser = buildDefaultUser(uid, email, fullName);
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
+
       const userRef = doc(db, "users", uid);
-      const docSnap = await getDoc(userRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as UserDocument;
-        if (typeof window !== "undefined") {
-          localStorage.setItem(`prahari_user_${uid}`, JSON.stringify(data));
-        }
-        return data;
+
+      // Read first to avoid overwriting existing profile fields
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const existing = snap.data() as UserDocument;
+        cacheSet(cacheKey, existing);
+        return existing;
       }
 
-      const defaultUser: UserDocument = {
-        uid,
-        fullName: fullName || email.split("@")[0] || "Prahari AI User",
-        email,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        role: "user",
-        workStyle: "",
-        notificationPreferences: {
-          webPush: false,
-          email: false
-        },
-        timezone: "Asia/Kolkata",
-        demoModeEnabled: true
-      };
-
+      // New user — write once
       await setDoc(userRef, defaultUser);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`prahari_user_${uid}`, JSON.stringify(defaultUser));
-      }
+      cacheSet(cacheKey, defaultUser);
       return defaultUser;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for createUserDocument");
-        if (typeof window !== "undefined") {
-          const cached = localStorage.getItem(`prahari_user_${uid}`);
-          if (cached) {
-            return JSON.parse(cached);
-          }
-          const defaultUser: UserDocument = {
-            uid,
-            fullName: fullName || email.split("@")[0] || "Prahari AI User",
-            email,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            role: "user",
-            workStyle: "",
-            notificationPreferences: {
-              webPush: false,
-              email: false
-            },
-            timezone: "Asia/Kolkata",
-            demoModeEnabled: true
-          };
-          localStorage.setItem(`prahari_user_${uid}`, JSON.stringify(defaultUser));
-          return defaultUser;
-        }
+        const cached = cacheGet<UserDocument>(cacheKey);
+        if (cached) return cached;
+        cacheSet(cacheKey, defaultUser);
+        return defaultUser;
       }
       return handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
 
   /**
-   * Fetches a user document
+   * Fetches user document. Returns cache instantly, then optionally syncs.
    */
   async getUserDocument(uid: string): Promise<UserDocument | null> {
+    const cacheKey = `prahari_user_${uid}`;
     const path = `users/${uid}`;
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const userRef = doc(db, "users", uid);
-      const docSnap = await getDoc(userRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as UserDocument;
-        if (typeof window !== "undefined") {
-          localStorage.setItem(`prahari_user_${uid}`, JSON.stringify(data));
-        }
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const data = snap.data() as UserDocument;
+        cacheSet(cacheKey, data);
         return data;
       }
       return null;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for getUserDocument");
-        if (typeof window !== "undefined") {
-          const cached = localStorage.getItem(`prahari_user_${uid}`);
-          if (cached) {
-            return JSON.parse(cached);
-          }
-          // Return a temporary user doc to prevent crashes down the road
-          const tempUser: UserDocument = {
-            uid,
-            fullName: "Prahari AI User",
-            email: "user@example.com",
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            role: "user",
-            workStyle: "",
-            notificationPreferences: {
-              webPush: false,
-              email: false
-            },
-            timezone: "Asia/Kolkata",
-            demoModeEnabled: true
-          };
-          localStorage.setItem(`prahari_user_${uid}`, JSON.stringify(tempUser));
-          return tempUser;
-        }
+        return cacheGet<UserDocument>(cacheKey);
       }
       return handleFirestoreError(error, OperationType.GET, path);
     }
   },
 
   /**
-   * Updates user settings / profile
+   * Returns cached user synchronously — for immediate UI paint.
    */
+  getCachedUserDocument(uid: string): UserDocument | null {
+    return cacheGet<UserDocument>(`prahari_user_${uid}`);
+  },
+
   async updateUserDocument(uid: string, data: Partial<UserDocument>): Promise<void> {
+    const cacheKey = `prahari_user_${uid}`;
     const path = `users/${uid}`;
+
+    // Optimistic cache update first — UI reflects change instantly
+    const cached = cacheGet<UserDocument>(cacheKey) ?? {};
+    cacheSet(cacheKey, { ...cached, ...data, updatedAt: new Date().toISOString() });
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const userRef = doc(db, "users", uid);
-      await updateDoc(userRef, {
-        ...data,
-        updatedAt: serverTimestamp()
-      });
-      if (typeof window !== "undefined") {
-        const cached = localStorage.getItem(`prahari_user_${uid}`);
-        const current = cached ? JSON.parse(cached) : {};
-        localStorage.setItem(`prahari_user_${uid}`, JSON.stringify({
-          ...current,
-          ...data,
-          updatedAt: new Date().toISOString()
-        }));
-      }
+      await updateDoc(userRef, stripUndefined({ ...data, updatedAt: serverTimestamp() }));
     } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for updateUserDocument");
-        if (typeof window !== "undefined") {
-          const cached = localStorage.getItem(`prahari_user_${uid}`);
-          const current = cached ? JSON.parse(cached) : {};
-          localStorage.setItem(`prahari_user_${uid}`, JSON.stringify({
-            ...current,
-            ...data,
-            updatedAt: new Date().toISOString()
-          }));
-        }
-        return;
-      }
+      if (isOfflineError(error)) return; // Cache already updated optimistically
       return handleFirestoreError(error, OperationType.UPDATE, path);
     }
   },
 
+  // ── TASKS ─────────────────────────────────────────────────────────────────────
+
   /**
-   * Creates a new task under users/{uid}/tasks/{taskId}
+   * Returns cached tasks synchronously — call this first for instant UI paint,
+   * then call getUserTasks() to sync from Firebase in the background.
    */
-  async createTask(uid: string, taskInput: {
-    title: string;
-    description: string;
-    category: string;
-    deadline: Date;
-    estimatedMinutes: number;
-    priority: string;
-  }): Promise<string> {
+  getCachedTasks(uid: string): TaskDocument[] {
+    return cacheGet<TaskDocument[]>(`prahari_tasks_${uid}`) ?? [];
+  },
+
+  /**
+   * Creates a task. Optimistic cache update before Firestore write.
+   */
+  async createTask(
+    uid: string,
+    taskInput: {
+      title: string;
+      description: string;
+      category: string;
+      deadline: Date;
+      estimatedMinutes: number;
+      priority: string;
+    }
+  ): Promise<string> {
     const path = `users/${uid}/tasks`;
-    
+    const cacheKey = `prahari_tasks_${uid}`;
+
     const generatedId = "task_" + Math.random().toString(36).substring(2, 11);
     const taskDoc: TaskDocument = {
       taskId: generatedId,
@@ -297,196 +290,177 @@ export const FirebaseService = {
       countdownStart: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      source: "manual"
+      source: "manual",
     };
 
+    // Optimistic cache write — task appears in UI before Firestore confirms
+    const cached = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+    cacheSet(cacheKey, [taskDoc, ...cached]);
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
-      const tasksCollectionRef = collection(db, "users", uid, "tasks");
-      const newTaskRef = doc(tasksCollectionRef);
-      taskDoc.taskId = newTaskRef.id;
-      const firestoreDoc = {
+      if (!db) throw new Error("Firestore uninitialized");
+
+      const tasksRef = collection(db, "users", uid, "tasks");
+      const newRef = doc(tasksRef);
+      taskDoc.taskId = newRef.id;
+
+      // Update cache with real Firestore ID
+      const refreshed = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+      cacheSet(
+        cacheKey,
+        refreshed.map((t) => (t.taskId === generatedId ? taskDoc : t))
+      );
+
+      const firestoreDoc = stripUndefined({
         ...taskDoc,
-        deadline: taskInput.deadline instanceof Date && !isNaN(taskInput.deadline.getTime())
-          ? Timestamp.fromDate(taskInput.deadline)
-          : Timestamp.fromDate(new Date()),
+        deadline:
+          taskInput.deadline instanceof Date && !isNaN(taskInput.deadline.getTime())
+            ? Timestamp.fromDate(taskInput.deadline)
+            : Timestamp.fromDate(new Date()),
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
-      await setDoc(newTaskRef, firestoreDoc);
-      
-      if (typeof window !== "undefined") {
-        const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-        const cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-        cachedTasks.unshift(taskDoc);
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-      }
+        updatedAt: serverTimestamp(),
+      });
+
+      await setDoc(newRef, firestoreDoc);
       return taskDoc.taskId;
     } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for createTask");
-        if (typeof window !== "undefined") {
-          const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-          const cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-          cachedTasks.unshift(taskDoc);
-          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-        }
-        return taskDoc.taskId;
-      }
+      if (isOfflineError(error)) return taskDoc.taskId; // Cache already has it
       return handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
 
   /**
-   * Lists tasks for the user
+   * Fetches all tasks once (getDocs). For real-time, use subscribeToTasks().
    */
   async getUserTasks(uid: string): Promise<TaskDocument[]> {
+    const cacheKey = `prahari_tasks_${uid}`;
     const path = `users/${uid}/tasks`;
-    
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
-      const tasksCollectionRef = collection(db, "users", uid, "tasks");
-      const q = query(tasksCollectionRef, orderBy("createdAt", "desc"));
-      const querySnapshot = await getDocs(q);
-      const tasks: TaskDocument[] = [];
-      querySnapshot.forEach((doc) => {
-        tasks.push(doc.data() as TaskDocument);
-      });
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(tasks));
-      }
+      if (!db) throw new Error("Firestore uninitialized");
+
+      const tasksRef = collection(db, "users", uid, "tasks");
+      const q = query(tasksRef, orderBy("createdAt", "desc"));
+      const snap = await getDocs(q);
+      const tasks: TaskDocument[] = snap.docs.map((d) => d.data() as TaskDocument);
+      cacheSet(cacheKey, tasks);
       return tasks;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for getUserTasks");
-        if (typeof window !== "undefined") {
-          const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-          if (cachedTasksStr) {
-            return JSON.parse(cachedTasksStr);
-          }
-        }
-        return [];
+        return cacheGet<TaskDocument[]>(cacheKey) ?? [];
       }
       return handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
   /**
-   * Reads a single selected task
+   * Real-time tasks subscription. Use this on DashboardPage instead of getUserTasks.
+   * Returns an unsubscribe function — call it in useEffect cleanup.
+   *
+   * Usage:
+   *   useEffect(() => {
+   *     const unsub = FirebaseService.subscribeToTasks(uid, (tasks) => setTasks(tasks));
+   *     return unsub;
+   *   }, [uid]);
    */
+  subscribeToTasks(
+    uid: string,
+    onUpdate: (tasks: TaskDocument[]) => void
+  ): () => void {
+    if (!db) {
+      onUpdate(cacheGet<TaskDocument[]>(`prahari_tasks_${uid}`) ?? []);
+      return () => {};
+    }
+
+    const cacheKey = `prahari_tasks_${uid}`;
+    const tasksRef = collection(db, "users", uid, "tasks");
+    const q = query(tasksRef, orderBy("createdAt", "desc"));
+
+    const unsub = onSnapshot(
+      q,
+      (snap: QuerySnapshot<DocumentData>) => {
+        const tasks = snap.docs.map((d) => d.data() as TaskDocument);
+        cacheSet(cacheKey, tasks);
+        onUpdate(tasks);
+      },
+      (error) => {
+        console.warn("subscribeToTasks error:", error.message);
+        onUpdate(cacheGet<TaskDocument[]>(cacheKey) ?? []);
+      }
+    );
+
+    return unsub;
+  },
+
   async getTask(uid: string, taskId: string): Promise<TaskDocument | null> {
     const path = `users/${uid}/tasks/${taskId}`;
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const taskRef = doc(db, "users", uid, "tasks", taskId);
-      const docSnap = await getDoc(taskRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as TaskDocument;
-        return data;
-      }
-      return null;
+      const snap = await getDoc(taskRef);
+      return snap.exists() ? (snap.data() as TaskDocument) : null;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for getTask");
-        if (typeof window !== "undefined") {
-          const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-          const cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-          const found = cachedTasks.find(t => t.taskId === taskId);
-          return found || null;
-        }
+        const cached = cacheGet<TaskDocument[]>(`prahari_tasks_${uid}`) ?? [];
+        return cached.find((t) => t.taskId === taskId) ?? null;
       }
       return handleFirestoreError(error, OperationType.GET, path);
     }
   },
 
-  /**
-   * Updates dynamic or basic fields of a task
-   */
   async updateTask(uid: string, taskId: string, data: Partial<TaskDocument>): Promise<void> {
+    const cacheKey = `prahari_tasks_${uid}`;
     const path = `users/${uid}/tasks/${taskId}`;
+
+    // Optimistic update — UI reflects change instantly
+    const cached = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+    cacheSet(
+      cacheKey,
+      cached.map((t) =>
+        t.taskId === taskId ? { ...t, ...data, updatedAt: new Date().toISOString() } : t
+      )
+    );
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const taskRef = doc(db, "users", uid, "tasks", taskId);
-      await updateDoc(taskRef, {
-        ...data,
-        updatedAt: serverTimestamp()
-      });
-      if (typeof window !== "undefined") {
-        const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-        let cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-        cachedTasks = cachedTasks.map(t => t.taskId === taskId ? { 
-          ...t, 
-          ...data, 
-          updatedAt: new Date().toISOString() 
-        } : t);
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-      }
+      await updateDoc(taskRef, stripUndefined({ ...data, updatedAt: serverTimestamp() }));
     } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for updateTask");
-        if (typeof window !== "undefined") {
-          const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-          let cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-          cachedTasks = cachedTasks.map(t => t.taskId === taskId ? { 
-            ...t, 
-            ...data, 
-            updatedAt: new Date().toISOString() 
-          } : t);
-          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-        }
-        return;
-      }
+      if (isOfflineError(error)) return;
       return handleFirestoreError(error, OperationType.UPDATE, path);
     }
   },
 
-  /**
-   * Deletes a task
-   */
   async deleteTask(uid: string, taskId: string): Promise<void> {
+    const cacheKey = `prahari_tasks_${uid}`;
     const path = `users/${uid}/tasks/${taskId}`;
+
+    // Optimistic delete
+    const cached = cacheGet<TaskDocument[]>(cacheKey) ?? [];
+    cacheSet(cacheKey, cached.filter((t) => t.taskId !== taskId));
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const taskRef = doc(db, "users", uid, "tasks", taskId);
       await deleteDoc(taskRef);
-      if (typeof window !== "undefined") {
-        const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-        let cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-        cachedTasks = cachedTasks.filter(t => t.taskId !== taskId);
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-      }
     } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for deleteTask");
-        if (typeof window !== "undefined") {
-          const cachedTasksStr = localStorage.getItem(`prahari_tasks_${uid}`);
-          let cachedTasks: TaskDocument[] = cachedTasksStr ? JSON.parse(cachedTasksStr) : [];
-          cachedTasks = cachedTasks.filter(t => t.taskId !== taskId);
-          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(cachedTasks));
-        }
-        return;
-      }
+      if (isOfflineError(error)) return;
       return handleFirestoreError(error, OperationType.DELETE, path);
     }
   },
 
-  /**
-   * Saves or overwrites a rescue plan under users/{uid}/tasks/{taskId}/rescuePlans/{planId}
-   */
-  async saveRescuePlan(uid: string, taskId: string, plan: Partial<RescuePlanDocument>): Promise<string> {
+  // ── RESCUE PLANS ──────────────────────────────────────────────────────────────
+
+  async saveRescuePlan(
+    uid: string,
+    taskId: string,
+    plan: Partial<RescuePlanDocument>
+  ): Promise<string> {
     const path = `users/${uid}/tasks/${taskId}/rescuePlans`;
+    const cacheKey = `prahari_plans_${uid}_${taskId}`;
+
     let planId = plan.planId || "";
-    
+
     const finalPlan: RescuePlanDocument = {
       planId,
       planTitle: plan.planTitle || "Rescue Plan",
@@ -502,149 +476,88 @@ export const FirebaseService = {
       progressPercentage: plan.progressPercentage,
       createdAt: plan.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      source: plan.source || "gemini"
+      source: plan.source || "gemini",
     };
 
+    // Optimistic cache write
+    const cached = cacheGet<RescuePlanDocument[]>(cacheKey) ?? [];
+    const idx = cached.findIndex((p) => p.planId === planId);
+    if (idx >= 0) cached[idx] = { ...cached[idx], ...finalPlan };
+    else cached.unshift(finalPlan);
+    cacheSet(cacheKey, cached);
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
-      const rescuePlansCollection = collection(db, "users", uid, "tasks", taskId, "rescuePlans");
+      if (!db) throw new Error("Firestore uninitialized");
+
+      const plansRef = collection(db, "users", uid, "tasks", taskId, "rescuePlans");
       if (!planId) {
-        planId = doc(rescuePlansCollection).id;
+        planId = doc(plansRef).id;
+        finalPlan.planId = planId;
       }
-      finalPlan.planId = planId;
+
       const planRef = doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId);
-      const finalPath = `users/${uid}/tasks/${taskId}/rescuePlans/${planId}`;
-      
-      const firestoreDoc = {
-        ...finalPlan,
-        createdAt: plan.createdAt || serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
-      await setDoc(planRef, firestoreDoc, { merge: true });
-      
-      if (typeof window !== "undefined") {
-        const cachedPlansStr = localStorage.getItem(`prahari_plans_${uid}_${taskId}`);
-        let cachedPlans: RescuePlanDocument[] = cachedPlansStr ? JSON.parse(cachedPlansStr) : [];
-        const index = cachedPlans.findIndex(p => p.planId === planId);
-        if (index >= 0) {
-          cachedPlans[index] = { ...cachedPlans[index], ...finalPlan };
-        } else {
-          cachedPlans.unshift(finalPlan);
-        }
-        localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify(cachedPlans));
-      }
+      await setDoc(
+        planRef,
+        stripUndefined({
+          ...finalPlan,
+          createdAt: plan.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }),
+        { merge: true }
+      );
+
       return planId;
     } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for saveRescuePlan");
-        if (typeof window !== "undefined") {
-          const cachedPlansStr = localStorage.getItem(`prahari_plans_${uid}_${taskId}`);
-          let cachedPlans: RescuePlanDocument[] = cachedPlansStr ? JSON.parse(cachedPlansStr) : [];
-          const index = cachedPlans.findIndex(p => p.planId === planId);
-          if (index >= 0) {
-            cachedPlans[index] = { ...cachedPlans[index], ...finalPlan };
-          } else {
-            cachedPlans.unshift(finalPlan);
-          }
-          localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify(cachedPlans));
-        }
-        return planId;
-      }
+      if (isOfflineError(error)) return planId;
       return handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
 
-  /**
-   * Fetches all rescue plans for a specific task
-   */
   async getRescuePlans(uid: string, taskId: string): Promise<RescuePlanDocument[]> {
+    const cacheKey = `prahari_plans_${uid}_${taskId}`;
     const path = `users/${uid}/tasks/${taskId}/rescuePlans`;
-    
+
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
-      const rescuePlansCollection = collection(db, "users", uid, "tasks", taskId, "rescuePlans");
-      const q = query(rescuePlansCollection, orderBy("updatedAt", "desc"));
-      const querySnapshot = await getDocs(q);
-      const plans: RescuePlanDocument[] = [];
-      querySnapshot.forEach((doc) => {
-        plans.push(doc.data() as RescuePlanDocument);
-      });
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify(plans));
-      }
+      if (!db) throw new Error("Firestore uninitialized");
+
+      const plansRef = collection(db, "users", uid, "tasks", taskId, "rescuePlans");
+      const q = query(plansRef, orderBy("updatedAt", "desc"));
+      const snap = await getDocs(q);
+      const plans = snap.docs.map((d) => d.data() as RescuePlanDocument);
+      cacheSet(cacheKey, plans);
       return plans;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for getRescuePlans");
-        if (typeof window !== "undefined") {
-          const cachedPlansStr = localStorage.getItem(`prahari_plans_${uid}_${taskId}`);
-          if (cachedPlansStr) {
-            return JSON.parse(cachedPlansStr);
-          }
-        }
-        return [];
+        return cacheGet<RescuePlanDocument[]>(cacheKey) ?? [];
       }
-      
-      try {
-        console.warn("getRescuePlans query failed, returning standard fetch:", error);
-        if (!db) {
-          throw new Error("Firestore database is uninitialized");
-        }
-        const rescuePlansCollection = collection(db, "users", uid, "tasks", taskId, "rescuePlans");
-        const querySnapshot2 = await getDocs(rescuePlansCollection);
-        const plans2: RescuePlanDocument[] = [];
-        querySnapshot2.forEach((doc) => {
-          plans2.push(doc.data() as RescuePlanDocument);
-        });
-        if (typeof window !== "undefined") {
-          localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify(plans2));
-        }
-        return plans2;
-      } catch (err2) {
-        if (isOfflineError(err2)) {
-          if (typeof window !== "undefined") {
-            const cachedPlansStr = localStorage.getItem(`prahari_plans_${uid}_${taskId}`);
-            if (cachedPlansStr) {
-              return JSON.parse(cachedPlansStr);
-            }
-          }
-          return [];
-        }
-        return handleFirestoreError(err2, OperationType.LIST, path);
-      }
+      return handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
   /**
-   * Fetches a single rescue plan
+   * Returns cached rescue plans synchronously — for instant UI paint.
    */
-  async getRescuePlan(uid: string, taskId: string, planId: string): Promise<RescuePlanDocument | null> {
+  getCachedRescuePlans(uid: string, taskId: string): RescuePlanDocument[] {
+    return cacheGet<RescuePlanDocument[]>(`prahari_plans_${uid}_${taskId}`) ?? [];
+  },
+
+  async getRescuePlan(
+    uid: string,
+    taskId: string,
+    planId: string
+  ): Promise<RescuePlanDocument | null> {
     const path = `users/${uid}/tasks/${taskId}/rescuePlans/${planId}`;
     try {
-      if (!db) {
-        throw new Error("Firestore database is uninitialized");
-      }
+      if (!db) throw new Error("Firestore uninitialized");
       const planRef = doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId);
-      const docSnap = await getDoc(planRef);
-      if (docSnap.exists()) {
-        return docSnap.data() as RescuePlanDocument;
-      }
-      return null;
+      const snap = await getDoc(planRef);
+      return snap.exists() ? (snap.data() as RescuePlanDocument) : null;
     } catch (error) {
       if (isOfflineError(error)) {
-        console.warn("Firestore offline - falling back to localStorage for getRescuePlan");
-        if (typeof window !== "undefined") {
-          const cachedPlansStr = localStorage.getItem(`prahari_plans_${uid}_${taskId}`);
-          const cachedPlans: RescuePlanDocument[] = cachedPlansStr ? JSON.parse(cachedPlansStr) : [];
-          const found = cachedPlans.find(p => p.planId === planId);
-          return found || null;
-        }
+        const cached = cacheGet<RescuePlanDocument[]>(`prahari_plans_${uid}_${taskId}`) ?? [];
+        return cached.find((p) => p.planId === planId) ?? null;
       }
       return handleFirestoreError(error, OperationType.GET, path);
     }
-  }
+  },
 };

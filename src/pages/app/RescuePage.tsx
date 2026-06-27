@@ -20,7 +20,7 @@ import {
   Copy,
   Download,
 } from "lucide-react";
-import { useAuth } from "../../components/ui/ProtectedRoute";
+import { useAuth } from "@/components/ui/ProtectedRoute";
 import {
   FirebaseService,
   TaskDocument,
@@ -29,7 +29,7 @@ import {
 import { GeminiService, Reprioritization } from "../../services/gemini";
 import { Card, Badge, Button } from "../../components/ui/BaseComponents";
 import { ExportHelper } from "../../utils/exportHelper";
-import { LockedRoute } from "../../config/constants";
+import { LockedRoute } from "@/config/constants";
 
 export function RescuePage() {
   const { firebaseUser, userDoc } = useAuth();

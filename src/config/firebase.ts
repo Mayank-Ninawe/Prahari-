@@ -1,18 +1,31 @@
 /**
- * Prahari AI - Firebase Configuration & Initialization Scaffolding
- * Safe workspace initialization that prevents app crashes when Firebase is not yet provisioned.
+ * Prahari AI - Firebase Configuration & Initialization
+ * Fast, cache-first setup for web.
  */
 
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
 
-// Dynamic LocalStorage & Environment Overrides to securely bind custom runtime values without exposure
-const getActiveConfig = () => {
-  const activeConfig = { ...firebaseConfig };
+type FirebaseAppletConfig = {
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  measurementId?: string;
+  firestoreDatabaseId?: string;
+};
 
-  // Prioritize Vite environment variables if defined (secure runtime configuration)
+const getActiveConfig = (): FirebaseAppletConfig => {
+  const activeConfig: FirebaseAppletConfig = { ...(firebaseConfig as FirebaseAppletConfig) };
+
   if (import.meta.env.VITE_FIREBASE_API_KEY) activeConfig.apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
   if (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) activeConfig.authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
   if (import.meta.env.VITE_FIREBASE_PROJECT_ID) activeConfig.projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
@@ -36,49 +49,41 @@ const getActiveConfig = () => {
     if (customStorageBucket) activeConfig.storageBucket = customStorageBucket;
     if (customMessagingSenderId) activeConfig.messagingSenderId = customMessagingSenderId;
     if (customAppId) activeConfig.appId = customAppId;
-    if (customFirestoreDatabaseId) {
-      activeConfig.firestoreDatabaseId = customFirestoreDatabaseId;
-    }
+    if (customFirestoreDatabaseId) activeConfig.firestoreDatabaseId = customFirestoreDatabaseId;
   }
+
   return activeConfig;
 };
 
 const activeFirebaseConfig = getActiveConfig();
-const isConfigured = !!activeFirebaseConfig && !!activeFirebaseConfig.apiKey;
+const isConfigured =
+  !!activeFirebaseConfig.apiKey &&
+  !!activeFirebaseConfig.projectId &&
+  !!activeFirebaseConfig.appId;
 
-// Initialize standard services
-let app: any = null;
-export let db: any = null;
-export let auth: any = null;
+let app: ReturnType<typeof initializeApp> | null = null;
+export let db: ReturnType<typeof initializeFirestore> | null = null;
+export let auth: ReturnType<typeof getAuth> | null = null;
 
 if (isConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(activeFirebaseConfig) : getApp();
-    db = getFirestore(app, activeFirebaseConfig.firestoreDatabaseId);
+
+    db = initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+      ignoreUndefinedProperties: true,
+    });
+
     auth = getAuth(app);
     console.log("Firebase initialized successfully on Prahari AI.");
-    
-    // Skill requirement: Validate Connection to Firestore on startup
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, "test", "connection"));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("the client is offline")) {
-          console.warn("Please check your Firebase configuration: Client is offline.");
-        }
-      }
-    };
-    testConnection();
   } catch (err) {
     console.warn("Firebase initialization failed. Using mock stub mode.", err);
   }
 } else {
-  console.log("Firebase not yet provisioned (Phase 1 Workspace Mode). Firestore and Auth are in mock/stub state.");
+  console.log("Firebase not yet provisioned. Firestore and Auth are in mock/stub state.");
 }
-
-// =========================================================================
-// ERROR HANDLER (Strict Firebase Skill Mandated Pattern)
-// =========================================================================
 
 export enum OperationType {
   CREATE = "create",
@@ -106,10 +111,11 @@ export interface FirestoreErrorInfo {
   };
 }
 
-/**
- * Handles Firestore security exceptions by packaging diagnostic auth metrics into a standard JSON message.
- */
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -118,14 +124,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       emailVerified: auth?.currentUser?.emailVerified || null,
       isAnonymous: auth?.currentUser?.isAnonymous || null,
       tenantId: auth?.currentUser?.tenantId || null,
-      providerInfo: auth?.currentUser?.providerData?.map((provider: any) => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || [],
+      providerInfo:
+        auth?.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
     },
     operationType,
     path,
   };
+
   console.error("Firestore Error Exception Caught:", JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }

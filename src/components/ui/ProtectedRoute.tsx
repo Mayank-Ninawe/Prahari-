@@ -11,7 +11,7 @@ import {
 } from "firebase/auth";
 import { auth } from "../../config/firebase";
 import { FirebaseService, UserDocument } from "../../services/firebaseService";
-import { LockedRoute } from "../../config/constants";
+import { LockedRoute } from "@/config/constants";
 
 // Authentication Context Definition
 interface AuthContextType {

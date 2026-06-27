@@ -15,8 +15,8 @@ import {
   Sparkles,
   ChevronLeft
 } from "lucide-react";
-import { useAuth } from "../../components/ui/ProtectedRoute";
-import { LockedRoute } from "../../config/constants";
+import { useAuth } from "@/components/ui/ProtectedRoute";
+import { LockedRoute } from "@/config/constants";
 
 export function AuthPage() {
   const { login, signup, loginWithGoogle, isAuthenticated } = useAuth();

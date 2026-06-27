@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   Lock,
 } from "lucide-react";
-import { LockedRoute } from "../../config/constants";
+import { LockedRoute } from "@/config/constants";
 
 // ==========================================
 // 1. HIGH-PERFORMANCE INTERSECTION OBSERVER REVEAL HOOK

@@ -5,15 +5,15 @@
 
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider, ProtectedRoute } from "./components/ui/ProtectedRoute";
-import { PublicLayout } from "./components/layout/PublicLayout";
-import { AppLayout } from "./components/layout/AppLayout";
-import { LandingPage } from "./pages/public/LandingPage";
-import { AuthPage } from "./pages/public/AuthPage";
-import { DashboardPage } from "./pages/app/DashboardPage";
-import { RescuePage } from "./pages/app/RescuePage";
-import { ProfilePage } from "./pages/app/ProfilePage";
-import { LockedRoute } from "./config/constants";
+import { AuthProvider, ProtectedRoute } from "@/components/ui/ProtectedRoute";
+import { PublicLayout } from "@/components/layout/PublicLayout";
+import { AppLayout } from "@/components/layout/AppLayout";
+import { LandingPage } from "@/pages/public/LandingPage";
+import { AuthPage } from "@/pages/public/AuthPage";
+import { DashboardPage } from "@/pages/app/DashboardPage";
+import { RescuePage } from "@/pages/app/RescuePage";
+import { ProfilePage } from "@/pages/app/ProfilePage";
+import { LockedRoute } from "@/config/constants";
 
 export default function App() {
   return (

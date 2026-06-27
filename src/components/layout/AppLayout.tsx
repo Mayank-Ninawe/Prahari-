@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { Shield, LogOut, Menu, X } from "lucide-react";
-import { LockedRoute } from "../../config/constants";
+import { LockedRoute } from "@/config/constants";
 import { useAuth } from "../ui/ProtectedRoute";
 import { APP_NAVIGATION } from "../../config/navigation";
 

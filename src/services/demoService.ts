@@ -1,12 +1,11 @@
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDocs, 
-  deleteDoc, 
+import {
+  collection,
+  doc,
+  setDoc,
+  getDocs,
   writeBatch,
   Timestamp,
-  serverTimestamp
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { TaskDocument, RescuePlanDocument } from "./firebaseService";
@@ -20,31 +19,79 @@ export interface DemoScenario {
   plan: Omit<RescuePlanDocument, "planId" | "createdAt" | "updatedAt">;
 }
 
-function isOfflineError(error: any): boolean {
+function isOfflineError(error: unknown): boolean {
   if (!db) return true;
   if (!error) return false;
-  const msg = error.message || String(error);
+  const msg = error instanceof Error ? error.message : String(error);
   return (
-    msg.includes("offline") || 
-    msg.includes("client is offline") || 
+    msg.includes("offline") ||
+    msg.includes("client is offline") ||
     msg.includes("Failed to get document") ||
     msg.includes("Failed to query") ||
-    msg.includes("uninitialized")
+    msg.includes("uninitialized") ||
+    msg.includes("network-request-failed")
   );
+}
+
+function setLocalTasks(uid: string, tasks: TaskDocument[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(tasks));
+}
+
+function setLocalPlans(uid: string, taskId: string, plans: RescuePlanDocument[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify(plans));
+}
+
+function clearLocalNotifications(uid: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+}
+
+function buildLocalSeed(uid: string, scenarios: DemoScenario[]) {
+  const localTasks: TaskDocument[] = [];
+  const localPlansMap: Record<string, RescuePlanDocument[]> = {};
+
+  for (const sc of scenarios) {
+    const taskId = sc.id;
+    const planId = sc.task.selectedPlanId || `${sc.id}_plan`;
+
+    const localTask: TaskDocument = {
+      ...sc.task,
+      taskId,
+      selectedPlanId: planId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const localPlan: RescuePlanDocument = {
+      ...sc.plan,
+      planId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    localTasks.push(localTask);
+    localPlansMap[taskId] = [localPlan];
+  }
+
+  setLocalTasks(uid, localTasks);
+  clearLocalNotifications(uid);
+
+  Object.entries(localPlansMap).forEach(([taskId, plans]) => {
+    setLocalPlans(uid, taskId, plans);
+  });
+
+  return { localTasks, localPlansMap };
 }
 
 export const DemoService = {
   getScenarios(): DemoScenario[] {
     const now = new Date();
-    
-    // Scenario 1: Compiler Project (Critical stand-by rescue path)
-    const compilerDeadline = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6 hours from now
-    
-    // Scenario 2: Pitch Deck (Scope compression recommended)
-    const pitchDeadline = new Date(now.getTime() + 45 * 60 * 1000); // 45 minutes from now
-    
-    // Scenario 3: Final Hackathon Submission (Active rescue plan)
-    const hackathonDeadline = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2 hours from now
+
+    const compilerDeadline = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+    const pitchDeadline = new Date(now.getTime() + 45 * 60 * 1000);
+    const hackathonDeadline = new Date(now.getTime() + 2 * 60 * 60 * 1000);
 
     return [
       {
@@ -70,7 +117,7 @@ export const DemoService = {
           source: "user",
           progressPercentage: 0,
           completedStepsCount: 0,
-          totalStepsCount: 4
+          totalStepsCount: 4,
         },
         plan: {
           planTitle: "Compiler Project Deadline Recovery Plan",
@@ -82,7 +129,7 @@ export const DemoService = {
               description: "Generate compiler parser files from lexer grammar. Run diagnostic scripts on base test suites.",
               estimatedMinutes: 60,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_compiler_2",
@@ -90,7 +137,7 @@ export const DemoService = {
               description: "Construct correct Abstract Syntax Tree nodes for primitive expressions and conditional branches.",
               estimatedMinutes: 80,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_compiler_3",
@@ -98,7 +145,7 @@ export const DemoService = {
               description: "Confirm scope validation, variables declaration lookup, and primitive types matching rules function.",
               estimatedMinutes: 50,
               urgencyTag: "soon",
-              completionType: "review"
+              completionType: "review",
             },
             {
               stepId: "step_compiler_4",
@@ -106,8 +153,8 @@ export const DemoService = {
               description: "Zip compiler sources, generate simple README usage command lines, verify build-test executes cleanly.",
               estimatedMinutes: 50,
               urgencyTag: "later",
-              completionType: "submit"
-            }
+              completionType: "submit",
+            },
           ],
           totalEstimatedMinutes: 240,
           firstActionLabel: "Start Parser Rules",
@@ -115,8 +162,8 @@ export const DemoService = {
           survivalGoal: "Achieve functional syntax validation and AST generation. Relinquish type-coercion compiler optimizers for next step.",
           completedStepIds: [],
           progressPercentage: 0,
-          source: "system"
-        }
+          source: "system",
+        },
       },
       {
         id: "scenario_pitch_deck",
@@ -141,7 +188,7 @@ export const DemoService = {
           source: "user",
           progressPercentage: 20,
           completedStepsCount: 1,
-          totalStepsCount: 5
+          totalStepsCount: 5,
         },
         plan: {
           planTitle: "SaaS Pitch Rescue Plan",
@@ -153,7 +200,7 @@ export const DemoService = {
               description: "Finalize TAM/SAM numbers and clean up competitors alignment diagram.",
               estimatedMinutes: 10,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_pitch_2",
@@ -161,7 +208,7 @@ export const DemoService = {
               description: "Define the exact click paths to avoid delays during screenshare mode.",
               estimatedMinutes: 15,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_pitch_3",
@@ -169,7 +216,7 @@ export const DemoService = {
               description: "Quick 2-minute raw recording in case demo platform fails.",
               estimatedMinutes: 15,
               urgencyTag: "soon",
-              completionType: "review"
+              completionType: "review",
             },
             {
               stepId: "step_pitch_4",
@@ -177,8 +224,8 @@ export const DemoService = {
               description: "Submit final PPTX/PDF file to system portal and check public link shares.",
               estimatedMinutes: 10,
               urgencyTag: "later",
-              completionType: "submit"
-            }
+              completionType: "submit",
+            },
           ],
           totalEstimatedMinutes: 50,
           firstActionLabel: "Refine Slides",
@@ -190,7 +237,7 @@ export const DemoService = {
               description: "Prune presentation from 12 slides down to 5 critical impact screens.",
               estimatedMinutes: 5,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_pitch_2",
@@ -198,7 +245,7 @@ export const DemoService = {
               description: "Skip live server setup. Use local localhost dev environment mock endpoints.",
               estimatedMinutes: 5,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_pitch_4",
@@ -206,15 +253,15 @@ export const DemoService = {
               description: "Export current slide deck to PDF directly and upload in-progress copy.",
               estimatedMinutes: 5,
               urgencyTag: "later",
-              completionType: "submit"
-            }
+              completionType: "submit",
+            },
           ],
           droppedOrDeferred: ["Record Backup Video Screenshare Segment (Saved 15 minutes)"],
           survivalGoal: "Submit a crisp 5-page PDF deck and execute mock live flow directly from local system. Save 35 minutes total.",
           completedStepIds: ["step_pitch_1"],
           progressPercentage: 20,
-          source: "system"
-        }
+          source: "system",
+        },
       },
       {
         id: "scenario_hackathon_submission",
@@ -239,7 +286,7 @@ export const DemoService = {
           source: "user",
           progressPercentage: 50,
           completedStepsCount: 2,
-          totalStepsCount: 4
+          totalStepsCount: 4,
         },
         plan: {
           planTitle: "Prahari AI Hackathon Submission Rescue Track",
@@ -251,7 +298,7 @@ export const DemoService = {
               description: "Verify Firestore indexes are built, run npm build script, verify static site assets render smoothly.",
               estimatedMinutes: 15,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_hackathon_2",
@@ -259,7 +306,7 @@ export const DemoService = {
               description: "Detail design decisions, problem statement, core value modules, and technical features description.",
               estimatedMinutes: 20,
               urgencyTag: "now",
-              completionType: "manual"
+              completionType: "manual",
             },
             {
               stepId: "step_hackathon_3",
@@ -267,7 +314,7 @@ export const DemoService = {
               description: "Record crisp 2-minute screenshare. Focus on showing real assessment, rescue planning, compression, and notifications.",
               estimatedMinutes: 35,
               urgencyTag: "soon",
-              completionType: "review"
+              completionType: "review",
             },
             {
               stepId: "step_hackathon_4",
@@ -275,8 +322,8 @@ export const DemoService = {
               description: "Complete final Devpost submission questionnaire, add Github URL, add demo video link and click submit.",
               estimatedMinutes: 20,
               urgencyTag: "later",
-              completionType: "submit"
-            }
+              completionType: "submit",
+            },
           ],
           totalEstimatedMinutes: 90,
           firstActionLabel: "Deploy and Build",
@@ -284,201 +331,160 @@ export const DemoService = {
           survivalGoal: "Complete Devpost and video upload with verified build status. Do not risk overbuilding unneeded feature flags.",
           completedStepIds: ["step_hackathon_1", "step_hackathon_2"],
           progressPercentage: 50,
-          source: "system"
-        }
-      }
+          source: "system",
+        },
+      },
     ];
   },
 
-  /**
-   * Clears all user tasks and plans, then seeds the 3 scenarios
-   */
   async seedDemoWorkspace(uid: string): Promise<void> {
     if (!uid) return;
 
-    try {
+    const scenarios = this.getScenarios();
+
+    // 1) Instant UI update first
+    buildLocalSeed(uid, scenarios);
+
+    // 2) Firestore sync second (run in background to prevent UI blocking)
+    const runSync = async () => {
+      try {
+        if (!db) return;
+
+      const tasksCol = collection(db, "users", uid, "tasks");
+      const tasksSnap = await getDocs(tasksCol);
+
       let batch = writeBatch(db);
       let opCount = 0;
 
       const commitIfNeeded = async (force = false) => {
-        if (opCount > 0 && (force || opCount >= 450)) {
+        if (opCount > 0 && (force || opCount >= 400)) {
           await batch.commit();
           batch = writeBatch(db);
           opCount = 0;
         }
       };
 
-      // 1. Delete all existing tasks & plans first to avoid pollution
-      const tasksCol = collection(db, "users", uid, "tasks");
-      const tasksSnap = await getDocs(tasksCol);
-      for (const d of tasksSnap.docs) {
-        // delete rescuePlans subcollection
-        const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
+      for (const taskDocSnap of tasksSnap.docs) {
+        const plansCol = collection(db, "users", uid, "tasks", taskDocSnap.id, "rescuePlans");
         const plansSnap = await getDocs(plansCol);
-        for (const p of plansSnap.docs) {
-          batch.delete(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
+
+        for (const planDocSnap of plansSnap.docs) {
+          batch.delete(doc(db, "users", uid, "tasks", taskDocSnap.id, "rescuePlans", planDocSnap.id));
           opCount++;
           await commitIfNeeded();
         }
-        batch.delete(doc(db, "users", uid, "tasks", d.id));
+
+        batch.delete(doc(db, "users", uid, "tasks", taskDocSnap.id));
         opCount++;
         await commitIfNeeded();
       }
 
-      // 2. Clear all existing notifications to match
-      const notifsCol = collection(db, "users", uid, "notifications");
-      const notifsSnap = await getDocs(notifsCol);
-      for (const d of notifsSnap.docs) {
-        batch.delete(doc(db, "users", uid, "notifications", d.id));
+      const notificationsCol = collection(db, "users", uid, "notifications");
+      const notificationsSnap = await getDocs(notificationsCol);
+
+      for (const notificationDocSnap of notificationsSnap.docs) {
+        batch.delete(doc(db, "users", uid, "notifications", notificationDocSnap.id));
         opCount++;
         await commitIfNeeded();
       }
-
-      // 3. Seed scenarios
-      const scenarios = this.getScenarios();
-      const localTasks: TaskDocument[] = [];
 
       for (const sc of scenarios) {
         const taskId = sc.id;
-        const planId = sc.plan.selectedPlanId || sc.task.selectedPlanId || "demo_plan_id";
+        const planId = sc.task.selectedPlanId || `${sc.id}_plan`;
 
-        const taskDoc: TaskDocument = {
+        const taskRef = doc(db, "users", uid, "tasks", taskId);
+        const planRef = doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId);
+
+        batch.set(taskRef, {
           ...sc.task,
           taskId,
+          selectedPlanId: planId,
           createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
+          updatedAt: serverTimestamp(),
+        });
 
-        const planDoc: RescuePlanDocument = {
-          ...sc.plan,
-          planId,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
-
-        batch.set(doc(db, "users", uid, "tasks", taskId), taskDoc);
         opCount++;
         await commitIfNeeded();
 
-        batch.set(doc(db, "users", uid, "tasks", taskId, "rescuePlans", planId), planDoc);
-        opCount++;
-        await commitIfNeeded();
-
-        // Prepare local representation
-        const localTask: TaskDocument = {
-          ...sc.task,
-          taskId,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        const localPlan: RescuePlanDocument = {
+        batch.set(planRef, {
           ...sc.plan,
           planId,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        localTasks.push(localTask);
-        if (typeof window !== "undefined") {
-          localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify([localPlan]));
-        }
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        opCount++;
+        await commitIfNeeded();
       }
 
       await commitIfNeeded(true);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(localTasks));
-        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+      } catch (error) {
+        if (isOfflineError(error)) return;
+        console.error("Demo seeding Firestore sync failed:", error);
       }
-    } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - seeding Demo Workspace in localStorage");
-        if (typeof window !== "undefined") {
-          const scenarios = this.getScenarios();
-          const localTasks: TaskDocument[] = [];
-          for (const sc of scenarios) {
-            const taskId = sc.id;
-            const planId = sc.plan.selectedPlanId || sc.task.selectedPlanId || "demo_plan_id";
-            const localTask: TaskDocument = {
-              ...sc.task,
-              taskId,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            const localPlan: RescuePlanDocument = {
-              ...sc.plan,
-              planId,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            };
-            localTasks.push(localTask);
-            localStorage.setItem(`prahari_plans_${uid}_${taskId}`, JSON.stringify([localPlan]));
-          }
-          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify(localTasks));
-          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
-        }
-        return;
-      }
-      throw error;
-    }
+    };
+    runSync();
   },
 
-  /**
-   * Resets workspace entirely to clean/empty state
-   */
   async resetToEmptyWorkspace(uid: string): Promise<void> {
-    if (!uid) return;
 
-    try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
+      localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+    }
+
+    const runReset = async () => {
+      try {
+        if (!db) return;
+
+      const tasksCol = collection(db, "users", uid, "tasks");
+      const tasksSnap = await getDocs(tasksCol);
+
       let batch = writeBatch(db);
       let opCount = 0;
 
       const commitIfNeeded = async (force = false) => {
-        if (opCount > 0 && (force || opCount >= 450)) {
+        if (opCount > 0 && (force || opCount >= 400)) {
           await batch.commit();
           batch = writeBatch(db);
           opCount = 0;
         }
       };
 
-      const tasksCol = collection(db, "users", uid, "tasks");
-      const tasksSnap = await getDocs(tasksCol);
-      for (const d of tasksSnap.docs) {
-        const plansCol = collection(db, "users", uid, "tasks", d.id, "rescuePlans");
+      for (const taskDocSnap of tasksSnap.docs) {
+        const plansCol = collection(db, "users", uid, "tasks", taskDocSnap.id, "rescuePlans");
         const plansSnap = await getDocs(plansCol);
-        for (const p of plansSnap.docs) {
-          batch.delete(doc(db, "users", uid, "tasks", d.id, "rescuePlans", p.id));
+
+        for (const planDocSnap of plansSnap.docs) {
+          batch.delete(doc(db, "users", uid, "tasks", taskDocSnap.id, "rescuePlans", planDocSnap.id));
           opCount++;
           await commitIfNeeded();
         }
-        batch.delete(doc(db, "users", uid, "tasks", d.id));
+
+        batch.delete(doc(db, "users", uid, "tasks", taskDocSnap.id));
         opCount++;
         await commitIfNeeded();
+
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(`prahari_plans_${uid}_${taskDocSnap.id}`);
+        }
       }
 
-      const notifsCol = collection(db, "users", uid, "notifications");
-      const notifsSnap = await getDocs(notifsCol);
-      for (const d of notifsSnap.docs) {
-        batch.delete(doc(db, "users", uid, "notifications", d.id));
+      const notificationsCol = collection(db, "users", uid, "notifications");
+      const notificationsSnap = await getDocs(notificationsCol);
+
+      for (const notificationDocSnap of notificationsSnap.docs) {
+        batch.delete(doc(db, "users", uid, "notifications", notificationDocSnap.id));
         opCount++;
         await commitIfNeeded();
       }
 
       await commitIfNeeded(true);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
-        localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
+      } catch (error) {
+        if (isOfflineError(error)) return;
+        console.error("Demo reset Firestore sync failed:", error);
       }
-    } catch (error) {
-      if (isOfflineError(error)) {
-        console.warn("Firestore offline - resetting Demo Workspace in localStorage");
-        if (typeof window !== "undefined") {
-          localStorage.setItem(`prahari_tasks_${uid}`, JSON.stringify([]));
-          localStorage.setItem(`prahari_notifications_${uid}`, JSON.stringify([]));
-        }
-        return;
-      }
-      throw error;
-    }
-  }
+    };
+    runReset();
+  },
 };
