@@ -30,6 +30,8 @@ export interface UserDocument {
   };
   timezone: string;
   demoModeEnabled: boolean;
+  pushEnabled?: boolean;
+  calendarSync?: boolean;
 }
 
 export interface TaskDocument {

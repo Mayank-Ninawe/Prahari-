@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  Shield,
   ArrowRight,
   Clock,
   ShieldAlert,
@@ -11,6 +10,7 @@ import {
   CheckCircle2,
   Lock,
 } from "lucide-react";
+import { PrahariLogo } from "../../components/ui/PrahariLogo";
 import { LockedRoute } from "@/config/constants";
 
 // ==========================================
@@ -208,7 +208,7 @@ export function LandingPage() {
             className="flex items-center gap-3 group focus:outline-none"
           >
             <div className="w-8 h-8 bg-[#01696f] flex items-center justify-center rounded-sm transition-transform duration-300 group-hover:scale-105">
-              <Shield className="w-4.5 h-4.5 text-[#f9f8f5]" />
+              <PrahariLogo className="text-[#f9f8f5]" size={18} />
             </div>
             <div className="flex flex-col text-left">
               <span className="font-serif font-bold text-lg tracking-tight leading-none text-[#28251d]">
@@ -1147,7 +1147,7 @@ export function LandingPage() {
             <div className="md:col-span-6 space-y-4">
               <div className="flex items-center gap-3">
                 <div className="w-7 h-7 bg-[#01696f] flex items-center justify-center rounded-sm">
-                  <Shield className="w-4 h-4 text-[#f9f8f5]" />
+                  <PrahariLogo className="text-[#f9f8f5]" size={16} />
                 </div>
                 <span className="font-serif font-bold text-lg text-[#28251d] tracking-tight">
                   Prahari AI

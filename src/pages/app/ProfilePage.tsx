@@ -1,84 +1,61 @@
 import React, { useState, useEffect } from "react";
-import { User, Bell, Database, Calendar, ShieldCheck, ShieldAlert, Sparkles, Sliders, CheckCircle2, RefreshCw, Key, Lock } from "lucide-react";
+import { User, Bell, Calendar, ShieldCheck, ShieldAlert, LogOut, RefreshCw } from "lucide-react";
 import { useAuth } from "@/components/ui/ProtectedRoute";
 import { FirebaseService } from "../../services/firebaseService";
 import { NotificationService } from "../../services/notificationService";
-import { Card, Badge, SectionHeader, Button } from "../../components/ui/BaseComponents";
 
 export function ProfilePage() {
   const { firebaseUser, userDoc, refreshUserDoc, logout } = useAuth();
   
-  // Settings bound to Firestore UserDocument
-  const [fullName, setFullName] = useState("");
-  const [pushEnabled, setPushEnabled] = useState(false);
-  const [calendarSync, setCalendarSync] = useState(false);
-  const [workStyle, setWorkStyle] = useState("normal");
+  // -- State: Profile Form --
+  const [fullName, setFullName] = useState(userDoc?.fullName || "");
+  const [workStyle, setWorkStyle] = useState(userDoc?.workStyle || "normal");
+  const [pushEnabled, setPushEnabled] = useState(userDoc?.pushEnabled || false);
+  const [calendarSync, setCalendarSync] = useState(userDoc?.calendarSync || false);
   
   const [savingSettings, setSavingSettings] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
+  // -- State: Notifications --
   const [permissionState, setPermissionState] = useState<NotificationPermission>("default");
-  const [notificationsSupported, setNotificationsSupported] = useState(false);
+  const notificationsSupported = "Notification" in window;
 
-  // Developer custom API credentials states
-  const [geminiApiKey, setGeminiApiKey] = useState("");
-  const [firebaseApiKey, setFirebaseApiKey] = useState("");
-  const [firebaseAuthDomain, setFirebaseAuthDomain] = useState("");
-  const [firebaseProjectId, setFirebaseProjectId] = useState("");
-  const [firebaseStorageBucket, setFirebaseStorageBucket] = useState("");
-  const [firebaseMessagingSenderId, setFirebaseMessagingSenderId] = useState("");
-  const [firebaseAppId, setFirebaseAppId] = useState("");
-  const [firebaseFirestoreDatabaseId, setFirebaseFirestoreDatabaseId] = useState("");
-
-  const [savingKeys, setSavingKeys] = useState(false);
-  const [keysSaveSuccess, setKeysSaveSuccess] = useState(false);
-
-  // Load keys and notification support on component mount
   useEffect(() => {
-    setNotificationsSupported(NotificationService.isSupported());
-    setPermissionState(NotificationService.getPermissionState());
+    if (notificationsSupported) {
+      setPermissionState(Notification.permission);
+    }
+  }, [notificationsSupported]);
 
-    setGeminiApiKey(localStorage.getItem("prahari_gemini_api_key") || "");
-    setFirebaseApiKey(localStorage.getItem("prahari_firebase_api_key") || "");
-    setFirebaseAuthDomain(localStorage.getItem("prahari_firebase_auth_domain") || "");
-    setFirebaseProjectId(localStorage.getItem("prahari_firebase_project_id") || "");
-    setFirebaseStorageBucket(localStorage.getItem("prahari_firebase_storage_bucket") || "");
-    setFirebaseMessagingSenderId(localStorage.getItem("prahari_firebase_messaging_sender_id") || "");
-    setFirebaseAppId(localStorage.getItem("prahari_firebase_app_id") || "");
-    setFirebaseFirestoreDatabaseId(localStorage.getItem("prahari_firebase_firestore_database_id") || "");
-  }, []);
-
+  // Sync state when userDoc loads
   useEffect(() => {
     if (userDoc) {
       setFullName(userDoc.fullName || "");
-      setPushEnabled(userDoc.notificationPreferences?.webPush || false);
-      setCalendarSync(userDoc.notificationPreferences?.email || false);
       setWorkStyle(userDoc.workStyle || "normal");
-    } else if (firebaseUser) {
-      setFullName(firebaseUser.displayName || "");
+      setPushEnabled(userDoc.pushEnabled || false);
+      setCalendarSync(userDoc.calendarSync || false);
     }
-  }, [userDoc, firebaseUser]);
+  }, [userDoc]);
 
   const handleRequestPermission = async () => {
-    const result = await NotificationService.requestPermission();
-    setPermissionState(result);
-    if (result === "granted") {
-      setPushEnabled(true);
-      NotificationService.sendLocalBrowserNotification(
-        "Prahari AI Notification Engine Activated",
-        "You will now receive high-priority escalation and compression warnings in this browser."
-      );
-    } else if (result === "denied") {
-      setPushEnabled(false);
-      setError("Notification permission was blocked. Please adjust your browser site preferences to enable alerts.");
+    try {
+      const permission = await NotificationService.requestPermission();
+      setPermissionState(permission);
+      if (permission === "granted") {
+        setPushEnabled(true);
+      } else {
+        setPushEnabled(false);
+        setError("Browser notifications were denied.");
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to request notification permission.");
     }
   };
 
   const handleTestNotification = () => {
     NotificationService.sendLocalBrowserNotification(
-      "TEST ESCALATION NUDGE - PRAHARI AI",
-      "Intervention successful. System tracking status checks are active."
+      "Test Alert",
+      "This is a test notification from Prahari AI."
     );
   };
 
@@ -88,486 +65,222 @@ export function ProfilePage() {
     
     setSavingSettings(true);
     setSaveSuccess(false);
-    setError("");
-
+    setError(null);
+    
     try {
       await FirebaseService.updateUserDocument(firebaseUser.uid, {
         fullName,
-        notificationPreferences: {
-          webPush: pushEnabled,
-          email: calendarSync
-        },
-        workStyle: workStyle as any
+        workStyle,
+        pushEnabled,
+        calendarSync
       });
-      
-      // Refresh the context state
       await refreshUserDoc();
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
+      setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
-      console.error("Error updating configuration:", err);
-      setError("Failed to synchronize parameters with Cloud Firestore.");
+      console.error(err);
+      setError("Failed to save settings. Please try again.");
     } finally {
       setSavingSettings(false);
     }
   };
 
-  const handleSaveKeys = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingKeys(true);
-    setKeysSaveSuccess(false);
-
-    try {
-      const setOrClear = (storageKey: string, val: string) => {
-        if (val.trim()) {
-          localStorage.setItem(storageKey, val.trim());
-        } else {
-          localStorage.removeItem(storageKey);
-        }
-      };
-
-      setOrClear("prahari_gemini_api_key", geminiApiKey);
-      setOrClear("prahari_firebase_api_key", firebaseApiKey);
-      setOrClear("prahari_firebase_auth_domain", firebaseAuthDomain);
-      setOrClear("prahari_firebase_project_id", firebaseProjectId);
-      setOrClear("prahari_firebase_storage_bucket", firebaseStorageBucket);
-      setOrClear("prahari_firebase_messaging_sender_id", firebaseMessagingSenderId);
-      setOrClear("prahari_firebase_app_id", firebaseAppId);
-      setOrClear("prahari_firebase_firestore_database_id", firebaseFirestoreDatabaseId);
-
-      setKeysSaveSuccess(true);
-      setTimeout(() => setKeysSaveSuccess(false), 2500);
-      
-      // Reload page to apply new secure parameters to Firebase configuration
-      window.location.reload();
-    } catch (err) {
-      console.error("Error saving keys locally:", err);
-      setError("Failed to persist secure credentials in sandbox.");
-    } finally {
-      setSavingKeys(false);
-    }
-  };
-
   return (
-    <div id="profile-page-root" className="space-y-8 font-sans max-w-4xl mx-auto text-left animate-fade-in">
+    <div className="space-y-8 font-sans max-w-3xl mx-auto text-left animate-fade-in pb-12">
       
       {/* 1. HEADER HERO */}
-      <div className="bg-white border border-slate-200 p-8 rounded-sm shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
-        <div className="absolute inset-y-0 right-0 w-24 opacity-[0.02] bg-[radial-gradient(#0f172a_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none"></div>
-        
+      <div className="bg-white border border-[#28251d]/12 p-6 md:p-8 rounded-sm shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
         <div className="flex gap-4 items-center">
-          <div className="w-14 h-14 bg-slate-900 text-white rounded-sm flex items-center justify-center text-xl font-bold shadow-xs border border-slate-800 shrink-0">
+          <div className="w-14 h-14 bg-[#28251d] text-white rounded-sm flex items-center justify-center text-xl font-serif font-bold shadow-sm shrink-0">
             {(fullName || firebaseUser?.email || "U")[0].toUpperCase()}
           </div>
           <div className="space-y-1">
-            <h2 className="text-base font-bold text-slate-900 tracking-tight">
+            <h2 className="text-xl font-bold font-serif text-[#28251d] tracking-tight">
               {fullName || "Workspace User"}
             </h2>
-            <p className="text-xs text-slate-500 font-mono tracking-wide uppercase">
+            <p className="text-[10px] text-[#7a7974] font-mono font-bold tracking-widest uppercase">
               {firebaseUser?.email || "demo@prahari.ai"}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider font-mono">
-              Live Firestore Sync Active
-            </span>
-          </div>
-          <Button 
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full sm:w-auto">
+          <button 
             onClick={() => logout()} 
-            variant="secondary" 
-            size="sm"
-            className="border-slate-300 text-slate-700 hover:bg-slate-50 font-mono text-[9px] font-bold tracking-widest uppercase"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-transparent border border-[#28251d]/15 hover:border-[#28251d]/40 text-[#28251d] text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer w-full sm:w-auto"
           >
-            Sign Out Session
-          </Button>
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </div>
 
-      {/* Error Indicator */}
       {error && (
-        <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xs flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-rose-600" />
+        <div className="p-4 bg-[#fff1f2] border border-[#fecdd3] text-[#be123c] text-sm rounded-sm flex items-center gap-3">
+          <ShieldAlert className="w-4.5 h-4.5 text-[#be123c] shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      {/* 2. FORM AND SYSTEM PARAMETERS */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      {/* 2. SETTINGS FORM */}
+      <form onSubmit={handleSaveSettings} className="bg-white border border-[#28251d]/12 p-6 sm:p-8 rounded-sm shadow-sm space-y-10">
         
-        {/* Left Side: Settings Option Panel */}
-        <form onSubmit={handleSaveSettings} className="lg:col-span-8 bg-white border border-slate-200 p-6 sm:p-8 rounded-sm shadow-xs space-y-6">
-          <SectionHeader
-            title="Rescue settings & protocols"
-            subtitle="Configure delivery guard algorithms and alert systems, backed by secure Firestore schemas."
-          />
+        {/* Section: Profile */}
+        <div className="space-y-6">
+          <div className="border-b border-[#28251d]/8 pb-4">
+            <h3 className="text-lg font-serif font-bold text-[#28251d]">Account Settings</h3>
+            <p className="text-sm text-[#7a7974] mt-1">Manage your identity and intervention preferences.</p>
+          </div>
 
-          <div className="space-y-5">
-            {/* Field: Full Name */}
-            <div className="space-y-1 pb-4 border-b border-slate-100">
-              <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">
-                User Full Name
-              </label>
+          <div className="space-y-1.5 max-w-md">
+            <label className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] block">
+              Full Name
+            </label>
+            <div className="relative">
+              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#7a7974]" />
               <input 
-                type="text" 
+                type="text"
                 required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className="w-full max-w-md px-3 py-2 text-xs text-slate-900 bg-slate-50 hover:bg-slate-50/50 border border-slate-250 focus:border-slate-900 focus:bg-white rounded-xs focus:ring-0 focus:outline-hidden transition-all"
-                placeholder="Workspace User"
+                className="w-full pl-9 pr-3 py-2.5 text-sm text-[#28251d] bg-[#f9f8f5] hover:bg-white border border-[#28251d]/15 focus:border-[#01696f] focus:bg-white rounded-sm focus:ring-1 focus:ring-[#01696f] focus:outline-none transition-all"
+                placeholder="Your name"
               />
             </div>
+          </div>
 
-            {/* Field: Work Style (Priority Optimization Mode) */}
-            <div className="space-y-1.5 pb-4 border-b border-slate-100">
-              <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">
-                Rescue Scoping Mode
-              </label>
-              <div className="grid grid-cols-3 gap-3 max-w-md">
-                {["relaxed", "normal", "aggressive"].map((style) => (
-                  <button
-                    key={style}
-                    type="button"
-                    onClick={() => setWorkStyle(style)}
-                    className={`px-3 py-2 text-[10px] font-mono font-bold uppercase border rounded-xs transition-all cursor-pointer ${
-                      workStyle === style 
-                        ? "bg-slate-900 text-white border-slate-900" 
-                        : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
-                    }`}
-                  >
-                    {style}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] text-slate-500 leading-relaxed max-w-md pt-1">
-                {workStyle === "relaxed" && "Relaxed: Keeps milestone buffers wide, maintaining high quality thresholds."}
-                {workStyle === "normal" && "Normal: Automatically identifies normal milestone slippages & de-scopes minor targets."}
-                {workStyle === "aggressive" && "Aggressive: Forcefully compresses estimates by up to 50%, forcing barebones MVT."}
-              </p>
+          <div className="space-y-2 pb-2">
+            <label className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] block">
+              Rescue Intervention Level
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl">
+              {["relaxed", "normal", "aggressive"].map((style) => (
+                <button
+                  key={style}
+                  type="button"
+                  onClick={() => setWorkStyle(style)}
+                  className={`px-4 py-3 text-sm font-medium border rounded-sm transition-all cursor-pointer flex flex-col gap-1 text-left ${
+                    workStyle === style 
+                      ? "bg-[#f9f8f5] text-[#28251d] border-[#01696f] shadow-sm ring-1 ring-[#01696f]/20" 
+                      : "bg-transparent text-[#7a7974] hover:text-[#28251d] border-[#28251d]/15 hover:border-[#28251d]/30"
+                  }`}
+                >
+                  <span className="capitalize font-serif font-bold">{style}</span>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-widest opacity-80">
+                    {style === "relaxed" && "Buffer-heavy"}
+                    {style === "normal" && "Balanced approach"}
+                    {style === "aggressive" && "Strict compression"}
+                  </span>
+                </button>
+              ))}
             </div>
-            
-            {/* Toggle 1: Web Push */}
-            <div className="pb-4 border-b border-slate-100 space-y-3.5 text-left">
-              <div className="flex items-start justify-between gap-6">
-                <div className="space-y-1 max-w-md">
-                  <label className="text-xs font-bold text-slate-900 uppercase tracking-wider font-mono flex items-center gap-2">
-                    <Bell className="w-4 h-4 text-slate-500" />
-                    <span>Web Alerts & Escalation Notifications</span>
-                  </label>
-                  <p className="text-xs text-slate-500 leading-relaxed">
-                    Receive real-time high-urgency alerts directly in your browser when a monitored task crosses high risk thresholds or is overdue for compression.
-                  </p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={pushEnabled}
-                  disabled={!notificationsSupported || permissionState === "denied"}
-                  onChange={(e) => {
-                    if (e.target.checked && permissionState !== "granted") {
-                      handleRequestPermission();
-                    } else {
-                      setPushEnabled(e.target.checked);
-                    }
-                  }}
-                  className="w-4.5 h-4.5 text-slate-900 border-slate-200 rounded-sm focus:ring-slate-900 cursor-pointer mt-0.5 disabled:opacity-50"
-                />
-              </div>
+          </div>
+        </div>
 
-              {/* Permission & Test Controls Panel */}
-              <div className="p-3.5 bg-slate-50 border border-slate-150 rounded-xs flex flex-wrap items-center justify-between gap-3.5">
-                <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-wider">
-                  <span className="text-slate-400">BROWSER PERMISSION:</span>
+        {/* Section: Integrations & Notifications */}
+        <div className="space-y-6">
+          <div className="border-b border-[#28251d]/8 pb-4">
+            <h3 className="text-lg font-serif font-bold text-[#28251d]">Integrations & Alerts</h3>
+            <p className="text-sm text-[#7a7974] mt-1">Connect your workspace tools and manage how you receive updates.</p>
+          </div>
+
+          <div className="space-y-8">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-6 max-w-2xl">
+              <div className="space-y-1.5 flex-1">
+                <label className="text-sm font-serif font-bold text-[#28251d] flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-[#7a7974]" />
+                  <span>Urgent Web Alerts</span>
+                </label>
+                <p className="text-[13px] text-[#7a7974] leading-relaxed">
+                  Receive browser notifications when a monitored task crosses high-risk thresholds and requires immediate attention.
+                </p>
+                
+                <div className="pt-3 flex flex-wrap items-center gap-3">
                   {!notificationsSupported ? (
-                    <span className="text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-sm">NOT SUPPORTED</span>
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#dc2626] bg-[#fef2f2] border border-[#fecaca] px-2 py-1 rounded-sm inline-block">Not Supported</span>
                   ) : permissionState === "granted" ? (
-                    <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-sm">AUTHORIZED</span>
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#01696f] bg-[#01696f]/10 border border-[#01696f]/20 px-2 py-1 rounded-sm inline-block">Authorized</span>
                   ) : permissionState === "denied" ? (
-                    <span className="text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-sm">BLOCKED</span>
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#dc2626] bg-[#fef2f2] border border-[#fecaca] px-2 py-1 rounded-sm inline-block">Blocked</span>
                   ) : (
-                    <span className="text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-sm">NOT REQUESTED</span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {notificationsSupported && permissionState === "default" && (
                     <button
                       type="button"
                       onClick={handleRequestPermission}
-                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-xs text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-2xs"
+                      className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] rounded-sm text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer inline-block"
                     >
-                      Authorize Alerts
+                      Enable Alerts
                     </button>
                   )}
-                  {notificationsSupported && permissionState === "granted" && (
-                    <button
-                      type="button"
-                      onClick={handleTestNotification}
-                      className="px-3 py-1 border border-slate-250 hover:border-slate-950 bg-white text-slate-700 hover:text-slate-950 rounded-xs text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-2xs"
-                    >
-                      Test Alert
-                    </button>
+                  
+                  {permissionState === "granted" && (
+                     <button
+                        type="button"
+                        onClick={handleTestNotification}
+                        className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] rounded-sm text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer inline-block"
+                      >
+                        Test Alert
+                      </button>
                   )}
                 </div>
               </div>
+              <div className="pt-1 sm:pt-0">
+                <input 
+                  type="checkbox" 
+                  checked={pushEnabled}
+                  disabled={permissionState !== "granted"}
+                  onChange={(e) => {
+                    if (permissionState === "granted") {
+                      setPushEnabled(e.target.checked);
+                    }
+                  }}
+                  className="w-5 h-5 text-[#01696f] border-[#28251d]/15 rounded-sm focus:ring-[#01696f] cursor-pointer disabled:opacity-50 bg-white"
+                />
+              </div>
             </div>
 
-            {/* Toggle 2: Calendar Integration */}
-            <div className="flex items-start justify-between gap-6">
-              <div className="space-y-1 max-w-md">
-                <label className="text-xs font-bold text-slate-900 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-slate-500" />
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-6 max-w-2xl">
+              <div className="space-y-1.5 flex-1">
+                <label className="text-sm font-serif font-bold text-[#28251d] flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-[#7a7974]" />
                   <span>Google Calendar Sync</span>
                 </label>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  Automatically export generated critical task paths to secure team execution slots on your Google Calendar.
+                <p className="text-[13px] text-[#7a7974] leading-relaxed">
+                  Automatically export critical task rescue plans to secure execution slots in your calendar.
                 </p>
               </div>
-              <input
-                type="checkbox"
-                checked={calendarSync}
-                onChange={(e) => setCalendarSync(e.target.checked)}
-                className="w-4.5 h-4.5 text-slate-900 border-slate-200 rounded-sm focus:ring-slate-900 cursor-pointer mt-0.5"
-              />
-            </div>
-
-          </div>
-
-          <div className="pt-6 border-t border-slate-150 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="h-6">
-              {saveSuccess && (
-                <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1.5 font-mono">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" /> CONFIG SYNCHRONIZED WITH FIRESTORE
-                </span>
-              )}
-            </div>
-
-            <Button
-              type="submit"
-              disabled={savingSettings}
-              variant="primary"
-              className="font-mono text-[10px] font-bold tracking-wider uppercase py-2 px-4"
-              icon={<RefreshCw className={`w-3.5 h-3.5 text-white ${savingSettings ? "animate-spin" : ""}`} />}
-            >
-              {savingSettings ? "Synchronizing..." : "Save Config Parameters"}
-            </Button>
-          </div>
-        </form>
-
-        {/* Right Side: Core Integrations Index */}
-        <div className="lg:col-span-4 bg-white border border-slate-200 p-6 rounded-sm shadow-xs flex flex-col justify-between">
-          <div className="space-y-6">
-            <div className="border-b border-slate-150 pb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-950 flex items-center gap-1.5">
-                <Database className="w-4.5 h-4.5 text-slate-700" />
-                <span>Integration Index</span>
-              </h3>
-              <p className="text-[11px] text-slate-500 mt-1">Current system connection states in the active Prahari container environment.</p>
-            </div>
-
-            <div className="space-y-4">
-              
-              {/* Firebase auth */}
-              <div className="p-4 bg-slate-50 rounded-xs border border-slate-150 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">Firebase Auth</span>
-                  <Badge urgency="low">ACTIVE</Badge>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Real Email/Password authentication active. Active session is scoped to <span className="font-semibold text-slate-800">{firebaseUser?.email}</span>.
-                </p>
-              </div>
-
-              {/* Firestore DB */}
-              <div className="p-4 bg-slate-50 rounded-xs border border-slate-150 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">Cloud Firestore</span>
-                  <Badge urgency="low">CONNECTED</Badge>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Real-time database connection is open and validated under deployed user secure rules.
-                </p>
-              </div>
-
-              {/* Gemini Flash */}
-              <div className="p-4 bg-slate-50 rounded-xs border border-slate-150 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">Gemini Models</span>
-                  <Badge urgency="high">STANDBY</Badge>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  The @google/genai TypeScript SDK is configured. Code logic is ready to be linked in the Phase 6 update.
-                </p>
+              <div className="pt-1 sm:pt-0">
+                <input
+                  type="checkbox"
+                  checked={calendarSync}
+                  onChange={(e) => setCalendarSync(e.target.checked)}
+                  className="w-5 h-5 text-[#01696f] border-[#28251d]/15 rounded-sm focus:ring-[#01696f] cursor-pointer bg-white"
+                />
               </div>
             </div>
-          </div>
-
-          <div className="pt-6 mt-6 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono select-none">
-            <span>SECURE PRAHARI ACTIVE</span>
-            <ShieldCheck className="w-3.5 h-3.5 text-slate-300" />
           </div>
         </div>
 
-      </div>
-
-      {/* 3. DEVELOPER CREDENTIALS SETUP (SECURE KEYS CONFIGURATION) */}
-      <div id="credentials-setup-block" className="bg-white border border-slate-200 p-6 sm:p-8 rounded-sm shadow-xs space-y-6">
-        <div className="border-b border-slate-150 pb-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-950 flex items-center gap-1.5">
-            <Key className="w-4.5 h-4.5 text-slate-700" />
-            <span>Developer Sandbox API Keys</span>
-          </h3>
-          <p className="text-[11px] text-slate-500 mt-1">
-            Configure your custom runtime API keys and Firebase web config overrides. These keys are strictly stored locally in your browser sandbox (localStorage) and never exposed in public repositories or logs.
-          </p>
-        </div>
-
-        <form onSubmit={handleSaveKeys} className="space-y-6">
-          {/* Gemini API Key Block */}
-          <div className="p-4 bg-amber-50/50 rounded-xs border border-amber-200/60 space-y-4">
-            <h4 className="text-xs font-bold text-amber-950 font-mono flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-amber-600 animate-pulse" />
-              <span>Gemini API Key Setup</span>
-            </h4>
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 flex items-center gap-1">
-                <span>Gemini API Key</span>
-                <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  value={geminiApiKey}
-                  onChange={(e) => setGeminiApiKey(e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-              <p className="text-[10px] text-slate-400 leading-relaxed">
-                If provided, Prahari AI will utilize this key for high-urgency Risk Scoring, Rescue Planning, and plan compression. If blank, standard fallback mode is active.
-              </p>
-            </div>
-          </div>
-
-          {/* Firebase Web Overrides Block */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-bold text-slate-950 font-mono flex items-center gap-1.5">
-              <Database className="w-4 h-4 text-slate-600" />
-              <span>Firebase Web Override Configuration</span>
-            </h4>
-            <p className="text-[10px] text-slate-400">
-              Provide your Firebase project credentials to fully override the client-side database connections. Leave blank to use Prahari's built-in sandbox project.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Firebase API Key</label>
-                <input
-                  type="password"
-                  value={firebaseApiKey}
-                  onChange={(e) => setFirebaseApiKey(e.target.value)}
-                  placeholder="Custom API Key Override"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Auth Domain</label>
-                <input
-                  type="text"
-                  value={firebaseAuthDomain}
-                  onChange={(e) => setFirebaseAuthDomain(e.target.value)}
-                  placeholder="e.g., project-id.firebaseapp.com"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Project ID</label>
-                <input
-                  type="text"
-                  value={firebaseProjectId}
-                  onChange={(e) => setFirebaseProjectId(e.target.value)}
-                  placeholder="e.g., project-id-123"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Storage Bucket</label>
-                <input
-                  type="text"
-                  value={firebaseStorageBucket}
-                  onChange={(e) => setFirebaseStorageBucket(e.target.value)}
-                  placeholder="e.g., project-id.appspot.com"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Messaging Sender ID</label>
-                <input
-                  type="text"
-                  value={firebaseMessagingSenderId}
-                  onChange={(e) => setFirebaseMessagingSenderId(e.target.value)}
-                  placeholder="e.g., 987654321012"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">App ID</label>
-                <input
-                  type="text"
-                  value={firebaseAppId}
-                  onChange={(e) => setFirebaseAppId(e.target.value)}
-                  placeholder="e.g., 1:987654321012:web:abcd1234efgh"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500">Firestore Database ID (Optional)</label>
-                <input
-                  type="text"
-                  value={firebaseFirestoreDatabaseId}
-                  onChange={(e) => setFirebaseFirestoreDatabaseId(e.target.value)}
-                  placeholder="e.g., (default)"
-                  className="w-full px-3 py-2 text-xs font-mono text-slate-900 placeholder:text-slate-400 bg-slate-50 focus:bg-white border border-slate-250 focus:border-slate-900 focus:outline-hidden rounded-xs transition-all"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-slate-150 flex items-center justify-between">
-            {keysSaveSuccess ? (
-              <span className="text-[11px] text-emerald-600 font-mono font-bold flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Keys successfully bound to local sandbox! Reloading...</span>
-              </span>
-            ) : (
-              <span className="text-[10px] text-slate-400 font-mono leading-relaxed">
-                Clicking save will register secure credentials inside your local web sandbox.
+        {/* Form Actions */}
+        <div className="pt-6 border-t border-[#28251d]/8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="h-6 flex items-center">
+            {saveSuccess && (
+              <span className="text-[10px] font-bold text-[#01696f] flex items-center gap-1.5 font-mono tracking-widest uppercase animate-fade-in">
+                <ShieldCheck className="w-4 h-4" /> Preferences saved
               </span>
             )}
-
-            <Button
-              type="submit"
-              disabled={savingKeys}
-              variant="primary"
-              className="font-mono text-[10px] font-bold tracking-wider uppercase py-2 px-4"
-              icon={<RefreshCw className={`w-3.5 h-3.5 text-white ${savingKeys ? "animate-spin" : ""}`} />}
-            >
-              {savingKeys ? "Registering keys..." : "Register Secure Keys"}
-            </Button>
           </div>
-        </form>
-      </div>
+          
+          <button
+            type="submit"
+            disabled={savingSettings}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-[#01696f] hover:bg-[#005156] disabled:bg-[#7a7974] text-white px-6 py-2.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all shadow-sm hover:-translate-y-0.5 hover:shadow cursor-pointer border-none"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${savingSettings ? "animate-spin" : ""}`} />
+            <span>{savingSettings ? "Saving..." : "Save Preferences"}</span>
+          </button>
+        </div>
+      </form>
 
     </div>
   );
 }
-
-export default ProfilePage;

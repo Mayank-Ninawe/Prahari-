@@ -35,6 +35,7 @@ export function DashboardPage() {
   const [error, setError] = React.useState<string>("");
 
   const [isFormOpen, setIsFormOpen] = React.useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [category, setCategory] = React.useState("Compliance");
@@ -55,6 +56,45 @@ export function DashboardPage() {
   React.useEffect(() => {
     setPermissionState(NotificationService.getPermissionState());
   }, []);
+
+  // ─── OPTIMISTIC UPDATE CALLBACKS ─────────────────────────────────────────────
+
+  const onOptimisticTaskCreate = (tempTask: TaskDocument) => {
+    setTasks((prev) => {
+      if (prev.some((t) => t.taskId === tempTask.taskId)) {
+        return prev;
+      }
+      return [tempTask, ...prev];
+    });
+  };
+
+  const onTaskCreateSuccess = (tempId: string, realTaskOrId: TaskDocument | string) => {
+    setTasks((prev) => {
+      const realId = typeof realTaskOrId === "string" ? realTaskOrId : realTaskOrId.taskId;
+      const hasReal = prev.some((t) => t.taskId === realId && t.taskId !== tempId);
+
+      if (hasReal) {
+        return prev.filter((t) => t.taskId !== tempId);
+      }
+
+      return prev.map((t) => {
+        if (t.taskId === tempId) {
+          if (typeof realTaskOrId === "string") {
+            return { ...t, taskId: realId };
+          } else {
+            return realTaskOrId;
+          }
+        }
+        return t;
+      });
+    });
+  };
+
+  const onTaskCreateError = (tempId: string) => {
+    setTasks((prev) => prev.filter((t) => t.taskId !== tempId));
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const loadNotifications = async (uid: string, currentTasks: TaskDocument[]) => {
     try {
@@ -114,7 +154,11 @@ export function DashboardPage() {
       // 1. Instant optimistic load from local cache
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
       if (cached && cached.length > 0) {
-        setTasks(cached);
+        setTasks((prev) => {
+          const temps = prev.filter((t) => t.taskId.startsWith("temp_"));
+          const merged = [...temps, ...cached.filter((c) => !temps.some((t) => t.taskId === c.taskId))];
+          return merged;
+        });
         setLoading(false); // Remove loading state immediately
       } else {
         setLoading(true);
@@ -124,7 +168,13 @@ export function DashboardPage() {
       
       // 2. Fetch fresh data from Firestore in the background
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fetchedTasks);
+      setTasks((prev) => {
+        const temps = prev.filter((t) => t.taskId.startsWith("temp_"));
+        const filteredFetched = fetchedTasks.filter(
+          (ft) => !temps.some((t) => t.taskId === ft.taskId)
+        );
+        return [...temps, ...filteredFetched];
+      });
       
       // 3. Load notifications based on fresh tasks
       loadNotifications(firebaseUser.uid, fetchedTasks);
@@ -243,14 +293,14 @@ export function DashboardPage() {
 
   const handleSubmitTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firebaseUser) return;
+    if (!firebaseUser || isSubmitting) return;
 
     if (!title || !deadline) {
       setError("Please fill in the task title and due date.");
       return;
     }
 
-    // Capture current values for background risk assessment before clearing the form
+    // Capture form values to build the optimistic task
     const currentTitle = title;
     const currentDescription = description;
     const currentCategory = category;
@@ -258,36 +308,58 @@ export function DashboardPage() {
     const currentEstimatedMinutes = Number(estimatedMinutes);
     const currentPriority = priority;
 
-    try {
-      setLoading(true);
-      setError("");
+    const tempId = `temp_${Date.now()}`;
+    const optimisticTask: TaskDocument = {
+      taskId: tempId,
+      title: currentTitle,
+      description: currentDescription,
+      category: currentCategory,
+      deadline: new Date(currentDeadline),
+      estimatedMinutes: currentEstimatedMinutes,
+      priority: currentPriority,
+      status: "draft",
+      riskScore: 0,
+      riskLevel: "safe",
+      riskReasonSummary: "",
+      aiLastEvaluatedAt: null,
+      selectedPlanId: "",
+      nextActionLabel: "",
+      countdownStart: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      source: "manual",
+    };
 
-      // 1. Instantly save the task to Firebase
-      const taskId = await FirebaseService.createTask(firebaseUser.uid, {
-        title: currentTitle,
-        description: currentDescription,
-        category: currentCategory,
-        deadline: new Date(currentDeadline),
-        estimatedMinutes: currentEstimatedMinutes,
-        priority: currentPriority,
-      });
+    setIsSubmitting(true);
+    setError("");
 
-      // 2. Immediately close the form & reset states to go back
-      setIsFormOpen(false);
-      setTitle("");
-      setDescription("");
-      setCategory("Compliance");
-      setDeadline("");
-      setEstimatedMinutes(120);
-      setPriority("high");
+    // 1. Instantly render optimistic task
+    onOptimisticTaskCreate(optimisticTask);
 
-      // 3. Immediately show the new task by fetching from Firebase
-      const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fetchedTasks);
-      setLoading(false); // Stop loading indicator early so page is interactive
+    // 2. Close modal & reset form states immediately
+    setIsFormOpen(false);
+    setTitle("");
+    setDescription("");
+    setCategory("Compliance");
+    setDeadline("");
+    setEstimatedMinutes(120);
+    setPriority("high");
 
-      // 4. Run AI risk assessment in the background to avoid any blocking/waiting
-      (async () => {
+    // 3. Save to Firebase in the background
+    FirebaseService.createTask(firebaseUser.uid, {
+      title: currentTitle,
+      description: currentDescription,
+      category: currentCategory,
+      deadline: new Date(currentDeadline),
+      estimatedMinutes: currentEstimatedMinutes,
+      priority: currentPriority,
+    })
+      .then(async (realId) => {
+        setIsSubmitting(false);
+        // Reconcile temp task with real task ID
+        onTaskCreateSuccess(tempId, realId);
+
+        // Run AI risk assessment in background without blocking
         try {
           const assessmentResult = await GeminiService.assessTaskRisk(
             {
@@ -305,7 +377,7 @@ export function DashboardPage() {
             }
           );
 
-          await FirebaseService.updateTask(firebaseUser.uid, taskId, {
+          await FirebaseService.updateTask(firebaseUser.uid, realId, {
             riskScore: assessmentResult.riskScore,
             riskLevel: assessmentResult.riskLevel,
             riskReasonSummary: assessmentResult.riskReasonSummary,
@@ -318,19 +390,38 @@ export function DashboardPage() {
                 : "Stay on track",
           });
 
-          // Silently refresh the list when background evaluation finishes
-          const updatedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-          setTasks(updatedTasks);
+          // Update task in local state with assessment result
+          setTasks((prev) =>
+            prev.map((t) => {
+              if (t.taskId === realId) {
+                return {
+                  ...t,
+                  riskScore: assessmentResult.riskScore,
+                  riskLevel: assessmentResult.riskLevel,
+                  riskReasonSummary: assessmentResult.riskReasonSummary,
+                  aiLastEvaluatedAt: new Date(),
+                  nextActionLabel:
+                    assessmentResult.recommendedMode === "compress"
+                      ? "Needs compression"
+                      : assessmentResult.recommendedMode === "rescue"
+                      ? "Needs rescue plan"
+                      : "Stay on track",
+                };
+              }
+              return t;
+            })
+          );
         } catch (aiErr) {
           console.error("AI risk assessment failed in background on task creation:", aiErr);
         }
-      })();
-
-    } catch (err: any) {
-      console.error("Error creating task:", err);
-      setError(err?.message || "We couldn’t save this task. Please try again.");
-      setLoading(false);
-    }
+      })
+      .catch((err: any) => {
+        setIsSubmitting(false);
+        setError("We couldn’t save this task to the server. Rolling back.");
+        console.error("Error creating task in background:", err);
+        // Rollback optimistic task
+        onTaskCreateError(tempId);
+      });
   };
 
   const handleDeleteTask = async (taskId: string, e: React.MouseEvent) => {
@@ -446,7 +537,7 @@ export function DashboardPage() {
         className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#28251d]/12"
       >
         <div className="space-y-1">
-          <h2 className="text-2xl font-semibold tracking-tight text-[#28251d] font-serif">
+          <h2 className="text-2xl font-bold tracking-tight text-[#28251d] font-serif">
             Deadline overview
           </h2>
           <p className="text-sm text-[#7a7974]">
@@ -461,7 +552,7 @@ export function DashboardPage() {
           <button
             id="create-task-btn"
             onClick={() => setIsFormOpen(true)}
-            className="inline-flex items-center gap-2 bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] px-4 py-2 text-sm font-medium rounded-sm transition-all hover:-translate-y-0.5 hover:shadow-sm cursor-pointer border-none"
+            className="inline-flex items-center gap-2 bg-[#01696f] hover:bg-[#005156] text-white px-5 py-2.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all shadow-sm hover:-translate-y-0.5 hover:shadow cursor-pointer border-none"
           >
             <Plus className="w-4 h-4" />
             <span>Add a deadline</span>
@@ -518,12 +609,12 @@ export function DashboardPage() {
           ========================================================================= */}
       <section id="primary-status-hero" className="w-full">
         {loading ? (
-          <div className="w-full bg-[#f3f0ec] border border-[#28251d]/10 rounded-sm p-12 text-center flex flex-col items-center justify-center space-y-4 animate-pulse">
+          <div className="w-full bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-12 text-center flex flex-col items-center justify-center space-y-4 animate-pulse">
             <div className="w-6 h-6 border-2 border-[#01696f] border-t-transparent rounded-full animate-spin"></div>
             <span className="text-sm text-[#7a7974]">Loading your tasks...</span>
           </div>
         ) : tasks.length === 0 ? (
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-8 sm:p-12 text-center space-y-6 relative overflow-hidden">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-8 sm:p-12 text-center space-y-6 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-[#01696f]"></div>
             <div className="w-12 h-12 bg-[#01696f]/10 rounded-full flex items-center justify-center mx-auto">
               <ShieldCheck className="w-6 h-6 text-[#01696f]" />
@@ -542,20 +633,20 @@ export function DashboardPage() {
             <div className="flex flex-wrap justify-center gap-3 pt-2">
               <button
                 onClick={handleLoadDemoScenarios}
-                className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium rounded-sm transition-all cursor-pointer border-none"
+                className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm shadow-sm transition-all cursor-pointer border-none"
               >
                 Load demo tasks
               </button>
               <button
                 onClick={() => setIsFormOpen(true)}
-                className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/45 bg-transparent text-[#28251d] text-sm font-medium rounded-sm transition-all cursor-pointer"
+                className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer"
               >
                 Add your first task
               </button>
             </div>
           </div>
         ) : (
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 sm:p-8 grid lg:grid-cols-12 gap-8 items-center relative overflow-hidden">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 sm:p-8 grid lg:grid-cols-12 gap-8 items-center relative overflow-hidden">
             <div className="absolute top-0 left-0 w-1.5 h-full bg-[#01696f]"></div>
 
             <div className="lg:col-span-8 space-y-6">
@@ -568,7 +659,7 @@ export function DashboardPage() {
                         : "bg-emerald-600"
                     }`}
                   ></span>
-                  <span className="text-[11px] font-medium tracking-wide text-[#7a7974]">
+                  <span className="text-[10px] font-mono font-bold tracking-widest uppercase text-[#7a7974]">
                     {criticalTasksCount > 0
                       ? "Needs attention"
                       : "On track"}
@@ -595,7 +686,7 @@ export function DashboardPage() {
                   <Link
                     to={LockedRoute.RESCUE}
                     state={{ taskId: spotlightTask.taskId }}
-                    className="inline-flex items-center justify-center bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium px-5 py-3 rounded-sm transition-all hover:-translate-y-0.5 hover:shadow-sm"
+                    className="inline-flex items-center justify-center bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider px-5 py-2.5 rounded-sm transition-all shadow-sm hover:-translate-y-0.5 hover:shadow border-none"
                   >
                     <span>Open rescue plan</span>
                     <ArrowRight className="w-4 h-4 ml-2" />
@@ -604,7 +695,7 @@ export function DashboardPage() {
 
                 <button
                   onClick={() => setIsFormOpen(true)}
-                  className="px-5 py-3 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm transition-all cursor-pointer"
+                  className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer"
                 >
                   Add another task
                 </button>
@@ -613,12 +704,12 @@ export function DashboardPage() {
 
             <div className="lg:col-span-4 lg:border-l lg:border-[#28251d]/10 lg:pl-8 space-y-4">
               <div className="space-y-1">
-                <span className="text-[11px] font-medium text-[#7a7974] block">
+                <span className="text-[10px] font-mono font-bold tracking-widest uppercase text-[#7a7974] block">
                   Overall pressure
                 </span>
                 <span
                   className={`text-4xl font-serif font-bold tracking-tight block ${
-                    criticalTasksCount > 0 ? "text-amber-700" : "text-emerald-700"
+                    criticalTasksCount > 0 ? "text-[#d97706]" : "text-[#01696f]"
                   }`}
                 >
                   {criticalTasksCount > 0 ? "High" : "Low"}
@@ -654,20 +745,20 @@ export function DashboardPage() {
       {tasks.length > 0 && (
         <section id="active-target-and-actions" className="grid lg:grid-cols-12 gap-8 items-start">
           <div className="lg:col-span-7 space-y-4 text-left">
-            <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10">
+            <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] pb-1 border-b border-[#28251d]/12">
               Most critical deadline
             </h4>
 
             {spotlightTask ? (
-              <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 space-y-5 relative overflow-hidden transition-all hover:border-[#28251d]/25">
+              <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-5 relative overflow-hidden transition-all hover:border-[#28251d]/25">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-[#01696f]/3 rounded-bl-full pointer-events-none"></div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#28251d]/8">
                   <div className="space-y-1">
-                    <span className="text-[11px] bg-[#01696f]/10 text-[#01696f] px-2 py-0.5 rounded-sm font-medium inline-block">
+                    <span className="text-[10px] font-mono font-bold tracking-widest uppercase bg-[#01696f]/10 text-[#01696f] px-2 py-0.5 rounded-sm inline-block">
                       {spotlightTask.category}
                     </span>
-                    <h3 className="text-lg font-semibold text-[#28251d] tracking-tight">
+                    <h3 className="text-xl font-serif font-bold text-[#28251d] tracking-tight">
                       {spotlightTask.title}
                     </h3>
                   </div>
@@ -676,11 +767,11 @@ export function DashboardPage() {
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
                         spotlightTask.priority === "critical"
-                          ? "bg-rose-600 animate-ping"
-                          : "bg-amber-600"
+                          ? "bg-[#dc2626] animate-ping"
+                          : "bg-[#d97706]"
                       }`}
                     ></span>
-                    <span className="text-[11px] font-medium text-[#7a7974]">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
                       {spotlightTask.priority} priority
                     </span>
                   </div>
@@ -688,7 +779,7 @@ export function DashboardPage() {
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm text-[#7a7974]">
                   <div className="space-y-0.5">
-                    <span className="text-[11px] text-[#7a7974]/80">Due</span>
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#7a7974]/80">Due</span>
                     <p className="font-semibold text-[#28251d] flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-[#7a7974]" />
                       {formatDeadlineDate(spotlightTask.deadline)}
@@ -696,14 +787,14 @@ export function DashboardPage() {
                   </div>
 
                   <div className="space-y-0.5">
-                    <span className="text-[11px] text-[#7a7974]/80">Estimated time</span>
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#7a7974]/80">Est. Time</span>
                     <p className="font-semibold text-[#01696f]">
                       {(spotlightTask.estimatedMinutes / 60).toFixed(1)} hours
                     </p>
                   </div>
 
                   <div className="col-span-2 sm:col-span-1 space-y-0.5">
-                    <span className="text-[11px] text-[#7a7974]/80">Next status</span>
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#7a7974]/80">Next status</span>
                     <p className="font-semibold text-[#28251d]">
                       {spotlightTask.nextActionLabel || "Ready for review"}
                     </p>
@@ -756,7 +847,7 @@ export function DashboardPage() {
                   <Link
                     to={LockedRoute.RESCUE}
                     state={{ taskId: spotlightTask.taskId }}
-                    className="inline-flex items-center justify-center w-full sm:w-auto bg-[#01696f] hover:bg-[#005156] text-[#f9f8f5] text-sm font-medium px-4 py-3 rounded-sm transition-all hover:translate-x-0.5 border-none"
+                    className="inline-flex items-center justify-center w-full sm:w-auto bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider px-5 py-2.5 rounded-sm transition-all shadow-sm hover:translate-x-0.5 border-none"
                   >
                     <span>Open rescue plan</span>
                     <ArrowUpRight className="w-3.5 h-3.5 ml-1.5" />
@@ -777,7 +868,7 @@ export function DashboardPage() {
 
             {tasks.length > 1 && (
               <div className="pt-2 space-y-2">
-                <span className="text-[11px] font-medium text-[#7a7974] block">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] block">
                   Other tasks ({tasks.length - 1})
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -787,7 +878,7 @@ export function DashboardPage() {
                     .map((t) => (
                       <div
                         key={t.taskId}
-                        className="bg-[#f3f0ec]/60 border border-[#28251d]/10 p-3.5 rounded-sm flex items-center justify-between gap-3 text-sm"
+                        className="bg-white border border-[#28251d]/8 shadow-xs p-3.5 rounded-sm flex items-center justify-between gap-3 text-sm"
                       >
                         <div className="space-y-0.5 min-w-0">
                           <p className="font-semibold text-[#28251d] line-clamp-1">
@@ -812,12 +903,12 @@ export function DashboardPage() {
           </div>
 
           <div className="lg:col-span-5 space-y-4 text-left">
-            <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10">
+            <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] pb-1 border-b border-[#28251d]/12">
               What to do next
             </h4>
 
-            <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-6 space-y-4">
-              <div className="flex items-start gap-3 p-3 bg-[#f9f8f5] border border-[#28251d]/10 rounded-sm">
+            <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-4">
+              <div className="flex items-start gap-3 p-3 bg-[#f9f8f5] border border-[#28251d]/8 rounded-sm">
                 <button
                   onClick={handleRequestPermissionInline}
                   disabled={permissionState === "granted"}
@@ -916,14 +1007,14 @@ export function DashboardPage() {
           ZONE 4: SECONDARY INSIGHTS
           ========================================================================= */}
       <section id="secondary-insights" className="space-y-4">
-        <h4 className="text-[11px] font-medium tracking-wide text-[#7a7974] pb-1 border-b border-[#28251d]/10 text-left">
+        <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] pb-1 border-b border-[#28251d]/12 text-left">
           Recent activity & workload
         </h4>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
-            <div className="border-b border-[#28251d]/10 pb-2.5 flex items-center justify-between">
-              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/8 pb-2.5 flex items-center justify-between">
+              <span className="text-[10px] font-mono font-bold uppercase text-[#28251d] tracking-widest flex items-center gap-1.5">
                 <Bell className="w-3.5 h-3.5 text-[#7a7974]" />
                 Alerts
               </span>
@@ -980,9 +1071,9 @@ export function DashboardPage() {
             )}
           </div>
 
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
-            <div className="border-b border-[#28251d]/10 pb-2.5">
-              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/8 pb-2.5">
+              <span className="text-[10px] font-mono font-bold uppercase text-[#28251d] tracking-widest flex items-center gap-1.5">
                 <Activity className="w-3.5 h-3.5 text-[#7a7974]" />
                 System readiness
               </span>
@@ -1015,9 +1106,9 @@ export function DashboardPage() {
             </div>
           </div>
 
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm p-5 space-y-4 text-left">
-            <div className="border-b border-[#28251d]/10 pb-2.5">
-              <span className="text-[11px] font-medium text-[#28251d] tracking-wide flex items-center gap-1.5">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-5 space-y-4 text-left">
+            <div className="border-b border-[#28251d]/8 pb-2.5">
+              <span className="text-[10px] font-mono font-bold uppercase text-[#28251d] tracking-widest flex items-center gap-1.5">
                 <Hourglass className="w-3.5 h-3.5 text-[#7a7974]" />
                 Workload summary
               </span>
@@ -1055,7 +1146,7 @@ export function DashboardPage() {
           ZONE 5: DEMO SANDBOX
           ========================================================================= */}
       <section id="collapsible-sandbox-wrapper" className="space-y-4">
-        <div className="flex items-center justify-between p-4 bg-[#f3f0ec] border border-[#28251d]/12 rounded-sm text-sm">
+        <div className="flex items-center justify-between p-4 bg-white border border-[#28251d]/12 shadow-sm rounded-sm text-sm">
           <div className="flex items-center gap-2">
             <Sliders className="w-4 h-4 text-[#01696f]" />
             <span className="font-serif font-bold text-sm text-[#28251d]">
@@ -1065,14 +1156,14 @@ export function DashboardPage() {
 
           <button
             onClick={() => setIsDemoSandboxOpen(!isDemoSandboxOpen)}
-            className="px-3 py-1.5 text-[11px] font-medium bg-transparent hover:bg-[#28251d]/5 text-[#7a7974] hover:text-[#28251d] border border-[#28251d]/15 hover:border-[#28251d]/35 rounded-sm transition-all cursor-pointer"
+            className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-widest bg-transparent hover:bg-[#28251d]/5 text-[#7a7974] hover:text-[#28251d] border border-[#28251d]/15 hover:border-[#28251d]/35 rounded-sm transition-all cursor-pointer"
           >
             {isDemoSandboxOpen ? "Hide tools" : "Show tools"}
           </button>
         </div>
 
         {isDemoSandboxOpen && (
-          <div className="bg-[#f3f0ec]/45 border border-[#28251d]/12 rounded-sm p-6 space-y-6 text-left animate-fade-in">
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-6 text-left animate-fade-in">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 space-y-4">
                 <div className="space-y-1">
@@ -1096,23 +1187,23 @@ export function DashboardPage() {
                   <button
                     onClick={handleSeedDemo}
                     disabled={demoActionLoading}
-                    className="px-4 py-2.5 bg-[#01696f] hover:bg-[#005156] disabled:bg-slate-300 text-white rounded-sm text-sm font-medium transition-all cursor-pointer disabled:cursor-not-allowed border-none shadow-xs"
+                    className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] disabled:bg-slate-300 text-white rounded-sm text-[11px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer disabled:cursor-not-allowed border-none shadow-sm"
                   >
-                    {demoActionLoading ? "Loading demo tasks..." : "Load demo tasks"}
+                    {demoActionLoading ? "Loading..." : "Load demo"}
                   </button>
 
                   <button
                     onClick={handleResetDemo}
                     disabled={demoActionLoading}
-                    className="px-4 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-white text-[#28251d] rounded-sm text-sm font-medium transition-all cursor-pointer disabled:cursor-not-allowed"
+                    className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] rounded-sm text-[11px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer disabled:cursor-not-allowed"
                   >
-                    Clear demo tasks
+                    Clear demo
                   </button>
                 </div>
               </div>
 
-              <div className="lg:col-span-5 bg-[#f3f0ec] border border-[#28251d]/10 rounded-sm p-4 space-y-3 text-sm">
-                <h5 className="font-semibold text-[#7a7974] tracking-wide">
+              <div className="lg:col-span-5 bg-[#f9f8f5] border border-[#28251d]/8 rounded-sm p-4 space-y-3 text-sm">
+                <h5 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
                   How Prahari works
                 </h5>
                 <ul className="space-y-2 text-[#7a7974] leading-relaxed">
@@ -1155,7 +1246,7 @@ export function DashboardPage() {
           ========================================================================= */}
       {isFormOpen && (
         <div className="fixed inset-0 bg-[#28251d]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-[#f3f0ec] border border-[#28251d]/12 max-w-md w-full p-6 sm:p-8 rounded-sm shadow-lg space-y-5 animate-slide-up relative">
+          <div className="bg-white border border-[#28251d]/12 max-w-md w-full p-6 sm:p-8 rounded-sm shadow-xl space-y-5 animate-slide-up relative">
             <button
               onClick={() => setIsFormOpen(false)}
               className="absolute top-4 right-4 p-1.5 hover:bg-[#28251d]/5 rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
@@ -1265,19 +1356,20 @@ export function DashboardPage() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-[#28251d]/10 flex justify-end gap-3">
+              <div className="pt-4 border-t border-[#28251d]/8 flex justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm cursor-pointer"
+                  className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#01696f] hover:bg-[#005156] text-white text-sm font-medium rounded-sm transition-all cursor-pointer border-none shadow-xs"
+                  disabled={isSubmitting}
+                  className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] disabled:bg-[#01696f]/40 disabled:cursor-not-allowed text-white text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer border-none shadow-sm hover:-translate-y-0.5 hover:shadow"
                 >
-                  Save task
+                  {isSubmitting ? "Saving..." : "Save task"}
                 </button>
               </div>
             </form>
@@ -1287,7 +1379,7 @@ export function DashboardPage() {
 
       {taskToDelete && (
         <div className="fixed inset-0 bg-[#28251d]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-[#f9f8f5] border border-rose-200/40 max-w-sm w-full p-6 rounded-sm shadow-xl space-y-4 animate-slide-up relative">
+          <div className="bg-white border border-[#28251d]/12 max-w-sm w-full p-6 rounded-sm shadow-xl space-y-4 animate-slide-up relative">
             <button
               onClick={() => setTaskToDelete(null)}
               className="absolute top-4 right-4 p-1.5 hover:bg-[#28251d]/5 rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
@@ -1312,14 +1404,14 @@ export function DashboardPage() {
               <button
                 type="button"
                 onClick={() => setTaskToDelete(null)}
-                className="px-4 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-sm font-medium rounded-sm cursor-pointer"
+                className="px-5 py-2.5 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={confirmDeleteTask}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium rounded-sm transition-all cursor-pointer border-none shadow-xs"
+                className="px-5 py-2.5 bg-[#dc2626] hover:bg-[#b91c1c] text-white text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer border-none shadow-sm hover:-translate-y-0.5 hover:shadow"
               >
                 Delete task
               </button>

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { 
-  Shield, 
   ArrowRight, 
   AlertCircle, 
   Check, 
@@ -15,6 +14,7 @@ import {
   Sparkles,
   ChevronLeft
 } from "lucide-react";
+import { PrahariLogo } from "../../components/ui/PrahariLogo";
 import { useAuth } from "@/components/ui/ProtectedRoute";
 import { LockedRoute } from "@/config/constants";
 
@@ -163,7 +163,7 @@ export function AuthPage() {
         <div className="max-w-7xl mx-auto px-6 sm:px-8 h-full flex items-center justify-between">
           <Link to={LockedRoute.LANDING} className="flex items-center gap-3 group focus:outline-none">
             <div className="w-8 h-8 bg-[#01696f] flex items-center justify-center rounded-sm transition-transform duration-300 group-hover:scale-105">
-              <Shield className="w-4.5 h-4.5 text-[#f9f8f5]" />
+              <PrahariLogo className="text-[#f9f8f5]" size={18} />
             </div>
             <div className="flex flex-col text-left">
               <span className="font-serif font-bold text-lg tracking-tight leading-none text-[#28251d]">Prahari AI</span>
