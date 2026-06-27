@@ -74,7 +74,7 @@ if (isConfigured) {
         tabManager: persistentMultipleTabManager(),
       }),
       ignoreUndefinedProperties: true,
-    });
+    }, activeFirebaseConfig.firestoreDatabaseId);
 
     auth = getAuth(app);
     console.log("Firebase initialized successfully on Prahari AI.");

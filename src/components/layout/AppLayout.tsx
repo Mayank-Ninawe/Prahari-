@@ -62,17 +62,17 @@ export function AppLayout() {
   );
 
   const renderSidebarFooter = () => (
-    <div className="p-4 border-t border-[#28251d]/8 mt-auto flex flex-col gap-3 bg-transparent">
+    <div className="p-4 border-t border-[#28251d]/6 mt-auto flex flex-col gap-3 bg-[#faf9f6]/40">
       <div className="flex items-center gap-2.5 px-1 py-1">
-        <div className="w-8 h-8 rounded-sm bg-[#28251d] text-[#f9f8f5] flex items-center justify-center text-xs font-serif font-bold shrink-0 shadow-sm">
+        <div className="w-8 h-8 rounded-sm bg-[#f4f2ea] border border-[#28251d]/10 text-[#01696f] flex items-center justify-center text-xs font-serif font-bold shrink-0 shadow-xs">
           {user?.name?.[0]?.toUpperCase() || "D"}
         </div>
 
         <div className="truncate text-left min-w-0">
-          <p className="text-[12px] font-bold text-[#28251d] truncate leading-tight">
+          <p className="text-[12.5px] font-serif font-bold text-[#28251d] truncate leading-tight">
             {user?.name || "Demo User"}
           </p>
-          <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-[#7a7974] truncate mt-0.5">
+          <p className="text-[8.5px] font-mono font-semibold uppercase tracking-widest text-[#8a8880] truncate mt-0.5">
             {user?.email || "demo@prahari.ai"}
           </p>
         </div>
@@ -81,9 +81,9 @@ export function AppLayout() {
       <button
         id="sidebar-logout-button"
         onClick={handleLogout}
-        className="flex items-center gap-2 px-1 py-1 text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer group w-fit"
+        className="flex items-center gap-2 px-2 py-1.5 text-[9px] font-mono font-semibold uppercase tracking-widest text-[#8a8880] hover:text-[#01696f] hover:bg-[#28251d]/4 rounded-sm transition-all duration-300 cursor-pointer group w-fit"
       >
-        <LogOut className="w-3.5 h-3.5 shrink-0 text-[#a19d96] group-hover:text-[#5f5b53] transition-colors" />
+        <LogOut className="w-3.5 h-3.5 shrink-0 text-[#a19d96] group-hover:text-[#01696f] transition-colors" />
         <span>Sign out</span>
       </button>
     </div>
@@ -101,20 +101,20 @@ export function AppLayout() {
         id="app-sidebar"
         className="w-60 bg-[#f5f2ed] border-r border-[#28251d]/8 hidden md:flex flex-col shrink-0 sticky top-0 h-screen"
       >
-        <div className="h-14 px-5 border-b border-[#28251d]/8 flex items-center justify-between shrink-0">
+        <div className="h-14 px-5 bg-[#faf9f6] border-b border-[#28251d]/6 flex items-center justify-between shrink-0">
           <Link
             to={LockedRoute.LANDING}
             className="flex items-center gap-2.5 focus:outline-none group"
           >
-            <div className="w-7 h-7 bg-[#28251d] rounded-sm flex items-center justify-center group-hover:bg-[#01696f] shadow-sm transition-colors">
-              <PrahariLogo className="text-white" size={16} />
+            <div className="w-7 h-7 bg-[#faf9f6] border border-[#28251d]/10 rounded-sm flex items-center justify-center shadow-xs group-hover:border-[#01696f]/40 group-hover:shadow-[0_2px_8px_-2px_rgba(1,105,111,0.12)] transition-all duration-300">
+              <PrahariLogo size={15} />
             </div>
 
             <div className="flex flex-col">
-              <span className="font-serif font-bold text-[13px] tracking-tight text-[#28251d]">
+              <span className="font-serif font-bold text-[13px] tracking-tight text-[#28251d] group-hover:text-[#01696f] transition-colors duration-200">
                 Prahari AI
               </span>
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-[#7a7974] leading-none mt-0.5">
+              <span className="text-[8.5px] font-mono font-semibold uppercase tracking-widest text-[#8a8880] leading-none mt-0.5">
                 Rescue workspace
               </span>
             </div>
@@ -148,20 +148,20 @@ export function AppLayout() {
           mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="h-14 px-5 border-b border-[#28251d]/8 flex items-center justify-between shrink-0">
+        <div className="h-14 px-5 bg-[#faf9f6] border-b border-[#28251d]/6 flex items-center justify-between shrink-0">
           <Link
             to={LockedRoute.LANDING}
             className="flex items-center gap-2.5 focus:outline-none group"
           >
-            <div className="w-7 h-7 bg-[#28251d] rounded-sm flex items-center justify-center shadow-sm">
-              <PrahariLogo className="text-white" size={16} />
+            <div className="w-7 h-7 bg-[#faf9f6] border border-[#28251d]/10 rounded-sm flex items-center justify-center shadow-xs group-hover:border-[#01696f]/40 group-hover:shadow-[0_2px_8px_-2px_rgba(1,105,111,0.12)] transition-all duration-300">
+              <PrahariLogo size={15} />
             </div>
 
             <div className="flex flex-col">
-              <span className="font-serif font-bold text-[13px] tracking-tight text-[#28251d]">
+              <span className="font-serif font-bold text-[13px] tracking-tight text-[#28251d] group-hover:text-[#01696f] transition-colors duration-200">
                 Prahari AI
               </span>
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-[#7a7974] leading-none mt-0.5">
+              <span className="text-[8.5px] font-mono font-semibold uppercase tracking-widest text-[#8a8880] leading-none mt-0.5">
                 Rescue workspace
               </span>
             </div>
@@ -170,7 +170,7 @@ export function AppLayout() {
           <button
             id="mobile-close-sidebar-btn"
             onClick={() => setMobileMenuOpen(false)}
-            className="p-1 hover:bg-[#28251d]/5 rounded-sm text-[#7a7974] hover:text-[#28251d] cursor-pointer bg-transparent border-none"
+            className="p-1.5 hover:bg-[#28251d]/4 rounded-sm text-[#8a8880] hover:text-[#01696f] transition-all cursor-pointer bg-transparent border-none"
             aria-label="Close navigation menu"
           >
             <X className="w-4 h-4" />

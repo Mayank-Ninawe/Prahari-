@@ -89,16 +89,16 @@ export function ProfilePage() {
     <div className="space-y-8 font-sans max-w-3xl mx-auto text-left animate-fade-in pb-12">
       
       {/* 1. HEADER HERO */}
-      <div className="bg-white border border-[#28251d]/12 p-6 md:p-8 rounded-sm shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
+      <div className="bg-[#faf9f6] border border-[#28251d]/8 p-6 md:p-8 rounded-sm shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-[#01696f]">
         <div className="flex gap-4 items-center">
-          <div className="w-14 h-14 bg-[#28251d] text-white rounded-sm flex items-center justify-center text-xl font-serif font-bold shadow-sm shrink-0">
+          <div className="w-14 h-14 bg-[#f4f2ea] border border-[#28251d]/10 text-[#01696f] rounded-sm flex items-center justify-center text-xl font-serif font-bold shadow-xs shrink-0">
             {(fullName || firebaseUser?.email || "U")[0].toUpperCase()}
           </div>
           <div className="space-y-1">
             <h2 className="text-xl font-bold font-serif text-[#28251d] tracking-tight">
               {fullName || "Workspace User"}
             </h2>
-            <p className="text-[10px] text-[#7a7974] font-mono font-bold tracking-widest uppercase">
+            <p className="text-[9.5px] text-[#8a8880] font-mono font-semibold tracking-widest uppercase">
               {firebaseUser?.email || "demo@prahari.ai"}
             </p>
           </div>
@@ -107,7 +107,7 @@ export function ProfilePage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full sm:w-auto">
           <button 
             onClick={() => logout()} 
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-transparent border border-[#28251d]/15 hover:border-[#28251d]/40 text-[#28251d] text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all cursor-pointer w-full sm:w-auto"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-transparent border border-[#28251d]/12 hover:border-[#01696f]/40 hover:bg-[#28251d]/4 text-[#28251d] hover:text-[#01696f] text-[9.5px] font-mono font-semibold uppercase tracking-wider rounded-sm transition-all duration-300 cursor-pointer w-full sm:w-auto"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Sign Out</span>
