@@ -22,10 +22,12 @@ import {
   AlertTriangle,
   TrendingUp,
   Minimize2,
+  Trophy,
+  Edit,
 } from "lucide-react";
 import { LockedRoute } from "@/config/constants";
 import { useAuth } from "@/components/ui/ProtectedRoute";
-import { FirebaseService, TaskDocument } from "../../services/firebaseService";
+import { FirebaseService, TaskDocument, GoalDocument } from "../../services/firebaseService";
 import { GeminiService } from "../../services/gemini";
 import { NotificationService, NotificationDocument, ReminderDecisionContext } from "../../services/notificationService";
 import { DemoService } from "../../services/demoService";
@@ -44,14 +46,15 @@ const parseDateToMillis = (d: any): number => {
   return new Date(d).getTime();
 };
 
-const sortTasksSafely = (tasksList: TaskDocument[]): RankedTask[] => {
-  return rankTasks(tasksList);
+const sortTasksSafely = (tasksList: TaskDocument[], goalsList?: GoalDocument[]): RankedTask[] => {
+  return rankTasks(tasksList, goalsList);
 };
 
 function reconcileTasks(
   current: TaskDocument[],
   incoming: TaskDocument[],
-  tempToRealMap: Record<string, string>
+  tempToRealMap: Record<string, string>,
+  goalsList?: GoalDocument[]
 ): RankedTask[] {
   const result: TaskDocument[] = [...current];
 
@@ -97,7 +100,7 @@ function reconcileTasks(
     }
   }
 
-  return sortTasksSafely(result);
+  return sortTasksSafely(result, goalsList);
 }
 
 export function DashboardPage() {
@@ -107,6 +110,27 @@ export function DashboardPage() {
   const [tasks, setTasks] = React.useState<RankedTask[]>([]);
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string>("");
+
+  // --- Goals State ---
+  const [goals, setGoals] = React.useState<GoalDocument[]>([]);
+  const [loadingGoals, setLoadingGoals] = React.useState<boolean>(true);
+
+  // Goal Form Modal state
+  const [isGoalFormOpen, setIsGoalFormOpen] = React.useState(false);
+  const [goalTitle, setGoalTitle] = React.useState("");
+  const [goalDescription, setGoalDescription] = React.useState("");
+  const [goalTargetType, setGoalTargetType] = React.useState<"task-completion" | "numeric" | "milestone">("task-completion");
+  const [goalTargetValue, setGoalTargetValue] = React.useState<string>("");
+  const [goalCurrentValue, setGoalCurrentValue] = React.useState<string>("");
+  const [goalDeadline, setGoalDeadline] = React.useState("");
+  const [goalIdToEdit, setGoalIdToEdit] = React.useState<string | null>(null);
+
+  // State for linking a task inline on a goal card
+  const [linkingGoalId, setLinkingGoalId] = React.useState<string | null>(null);
+  const [selectedTaskIdToLink, setSelectedTaskIdToLink] = React.useState("");
+
+  // Goal task select state inside create/edit task form
+  const [selectedGoalIdForTask, setSelectedGoalIdForTask] = React.useState("");
 
   const [isFormOpen, setIsFormOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -411,13 +435,21 @@ export function DashboardPage() {
     }
   };
 
+  const recommendationsDependencyKey = React.useMemo(() => {
+    const fp = tasks
+      .map((t) => `${t.taskId}_${t.status}_${t.riskScore || 0}_${t.riskLevel || ""}`)
+      .sort()
+      .join("|");
+    return `${fp}_${userDoc?.workStyle || ""}_${userDoc?.aggressiveness || ""}`;
+  }, [tasks, userDoc?.workStyle, userDoc?.aggressiveness]);
+
   React.useEffect(() => {
     if (tasks && tasks.length > 0) {
       loadRecommendations(tasks);
     } else {
       setRecommendationsData(null);
     }
-  }, [tasks]);
+  }, [recommendationsDependencyKey]);
 
   const tempToRealMapRef = React.useRef<Record<string, string>>({});
 
@@ -521,10 +553,19 @@ export function DashboardPage() {
   const loadTasks = async () => {
     if (!firebaseUser) return;
     try {
-      // 1. Instant optimistic load from local cache
+      // 1. Instant optimistic goals load from cache
+      const cachedGoals = FirebaseService.getCachedGoals(firebaseUser.uid);
+      if (cachedGoals && cachedGoals.length > 0) {
+        setGoals(cachedGoals);
+        setLoadingGoals(false);
+      } else {
+        setLoadingGoals(true);
+      }
+
+      // 2. Instant optimistic tasks load from local cache
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
       if (cached && cached.length > 0) {
-        setTasks((prev) => reconcileTasks(prev, cached, tempToRealMapRef.current));
+        setTasks((prev) => reconcileTasks(prev, cached, tempToRealMapRef.current, cachedGoals));
         setLoading(false); // Remove loading state immediately
       } else {
         setLoading(true);
@@ -532,17 +573,133 @@ export function DashboardPage() {
       
       setError("");
       
-      // 2. Fetch fresh data from Firestore in the background
+      // 3. Fetch fresh goals and tasks from Firestore in the background
+      const fetchedGoals = await FirebaseService.getUserGoals(firebaseUser.uid);
+      setGoals(fetchedGoals);
+      setLoadingGoals(false);
+
       const fetchedTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks((prev) => reconcileTasks(prev, fetchedTasks, tempToRealMapRef.current));
+      setTasks((prev) => reconcileTasks(prev, fetchedTasks, tempToRealMapRef.current, fetchedGoals));
       
-      // 3. Load notifications based on fresh tasks
+      // 4. Load notifications based on fresh tasks
       loadNotifications(firebaseUser.uid, fetchedTasks);
     } catch (err: any) {
       setError("We couldn’t load your tasks right now. Please refresh and try again.");
       console.error(err);
     } finally {
       setLoading(false);
+      setLoadingGoals(false);
+    }
+  };
+
+  // --- Goal CRUD and Action Handlers ---
+  const handleSubmitGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser) return;
+    if (!goalTitle || !goalDeadline) {
+      setError("Please specify a goal title and deadline.");
+      return;
+    }
+
+    try {
+      setError("");
+      const deadlineDate = new Date(goalDeadline);
+      const targetVal = goalTargetValue ? Number(goalTargetValue) : undefined;
+      const currentVal = goalCurrentValue ? Number(goalCurrentValue) : undefined;
+
+      if (goalIdToEdit) {
+        await FirebaseService.updateGoal(firebaseUser.uid, goalIdToEdit, {
+          title: goalTitle,
+          description: goalDescription,
+          targetType: goalTargetType,
+          targetValue: targetVal,
+          currentValue: currentVal,
+          deadline: deadlineDate,
+        });
+      } else {
+        await FirebaseService.createGoal(firebaseUser.uid, {
+          title: goalTitle,
+          description: goalDescription,
+          targetType: goalTargetType,
+          targetValue: targetVal,
+          currentValue: currentVal,
+          deadline: deadlineDate,
+        });
+      }
+
+      // Reload goals
+      const freshGoals = await FirebaseService.getUserGoals(firebaseUser.uid);
+      setGoals(freshGoals);
+
+      // Close modal & reset fields
+      setIsGoalFormOpen(false);
+      setGoalTitle("");
+      setGoalDescription("");
+      setGoalTargetType("task-completion");
+      setGoalTargetValue("");
+      setGoalCurrentValue("");
+      setGoalDeadline("");
+      setGoalIdToEdit(null);
+    } catch (err: any) {
+      console.error("Failed to save goal:", err);
+      setError("Failed to save goal. Please check your setup.");
+    }
+  };
+
+  const handleEditGoal = (goal: GoalDocument) => {
+    setGoalIdToEdit(goal.goalId);
+    setGoalTitle(goal.title);
+    setGoalDescription(goal.description);
+    setGoalTargetType(goal.targetType);
+    setGoalTargetValue(goal.targetValue !== undefined ? String(goal.targetValue) : "");
+    setGoalCurrentValue(goal.currentValue !== undefined ? String(goal.currentValue) : "");
+    
+    // Format deadline for input
+    let dStr = "";
+    if (goal.deadline) {
+      const d = goal.deadline instanceof Timestamp 
+        ? goal.deadline.toDate() 
+        : new Date(goal.deadline as any);
+      if (!isNaN(d.getTime())) {
+        dStr = d.toISOString().split("T")[0];
+      }
+    }
+    setGoalDeadline(dStr);
+    setIsGoalFormOpen(true);
+  };
+
+  const handleDeleteGoal = async (goalId: string) => {
+    if (!firebaseUser) return;
+    if (!window.confirm("Are you sure you want to delete this goal? Linked tasks will be unlinked, but not deleted.")) return;
+    try {
+      setError("");
+      await FirebaseService.deleteGoal(firebaseUser.uid, goalId);
+      const freshGoals = await FirebaseService.getUserGoals(firebaseUser.uid);
+      setGoals(freshGoals);
+    } catch (err) {
+      console.error("Failed to delete goal:", err);
+      setError("Failed to delete goal.");
+    }
+  };
+
+  const handleLinkTaskToGoal = async (goalId: string, taskId: string) => {
+    if (!firebaseUser || !taskId) return;
+    try {
+      setError("");
+      await FirebaseService.updateTask(firebaseUser.uid, taskId, { goalId });
+      
+      // Reload both tasks and goals to reflect updated progress instantly!
+      const freshTasks = await FirebaseService.getUserTasks(firebaseUser.uid);
+      setTasks(sortTasksSafely(freshTasks, goals));
+      
+      const freshGoals = await FirebaseService.getUserGoals(firebaseUser.uid);
+      setGoals(freshGoals);
+      
+      setLinkingGoalId(null);
+      setSelectedTaskIdToLink("");
+    } catch (err) {
+      console.error("Failed to link task to goal:", err);
+      setError("Failed to link task.");
     }
   };
 
@@ -556,12 +713,12 @@ export function DashboardPage() {
       
       // Instant update from cache instead of waiting for Firestore
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
-      setTasks(cached);
+      setTasks(sortTasksSafely(cached, goals));
       loadNotifications(firebaseUser.uid, cached);
       
       // Still trigger a background reload to ensure sync eventually settles
       const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fresh);
+      setTasks(sortTasksSafely(fresh, goals));
       loadNotifications(firebaseUser.uid, fresh);
       setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
@@ -582,12 +739,12 @@ export function DashboardPage() {
       
       // Instant update from cache
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
-      setTasks(cached);
+      setTasks(sortTasksSafely(cached, goals));
       loadNotifications(firebaseUser.uid, cached);
       
       // Still trigger background reload
       const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fresh);
+      setTasks(sortTasksSafely(fresh, goals));
       loadNotifications(firebaseUser.uid, fresh);
       setTimeout(() => setDemoMessage(""), 6000);
     } catch (err) {
@@ -697,6 +854,7 @@ export function DashboardPage() {
       updatedAt: new Date().toISOString(),
       source: "manual",
       prerequisiteTaskId: currentPrerequisiteTaskId || undefined,
+      goalId: selectedGoalIdForTask || undefined,
     };
 
     setIsSubmitting(true);
@@ -714,6 +872,8 @@ export function DashboardPage() {
     setEstimatedMinutes(120);
     setPriority("high");
     setPrerequisiteTaskId("");
+    const currentGoalIdForTask = selectedGoalIdForTask;
+    setSelectedGoalIdForTask("");
 
     // Reset submission lock instantly so users can perform other actions/adds without blocks
     setIsSubmitting(false);
@@ -727,6 +887,7 @@ export function DashboardPage() {
       estimatedMinutes: currentEstimatedMinutes,
       priority: currentPriority,
       prerequisiteTaskId: currentPrerequisiteTaskId || undefined,
+      goalId: currentGoalIdForTask || undefined,
     }, tempId)
       .then(async (realId) => {
         // Record tempId to realId mapping
@@ -833,12 +994,12 @@ export function DashboardPage() {
       await DemoService.seedDemoWorkspace(firebaseUser.uid);
       // Instant update from cache
       const cached = FirebaseService.getCachedTasks(firebaseUser.uid);
-      setTasks(cached);
+      setTasks(sortTasksSafely(cached, goals));
       loadNotifications(firebaseUser.uid, cached);
       
       // Background load
       const fresh = await FirebaseService.getUserTasks(firebaseUser.uid);
-      setTasks(fresh);
+      setTasks(sortTasksSafely(fresh, goals));
       loadNotifications(firebaseUser.uid, fresh);
     } catch (err) {
       console.error("Error seeding demo tasks:", err);
@@ -846,6 +1007,33 @@ export function DashboardPage() {
       setLoading(false);
     }
   };
+
+  const computedGoals = React.useMemo(() => {
+    return goals.map((g) => {
+      const linkedTasks = tasks.filter((t) => t.goalId === g.goalId);
+      const completedTasks = linkedTasks.filter((t) => {
+        const sLower = t.status?.toLowerCase();
+        return sLower === "completed" || sLower === "mitigated";
+      });
+      let computedProgress = g.progressPercent || 0;
+      if (g.targetType === "task-completion") {
+        computedProgress = linkedTasks.length > 0
+          ? Math.round((completedTasks.length / linkedTasks.length) * 100)
+          : 0;
+      } else if (g.targetType === "numeric") {
+        const target = g.targetValue || 0;
+        computedProgress = target > 0
+          ? Math.round(((g.currentValue || 0) / target) * 100)
+          : 0;
+      }
+      return {
+        ...g,
+        computedProgress,
+        linkedTasks,
+        completedTasks,
+      };
+    });
+  }, [goals, tasks]);
 
   const criticalTasksCount = tasks.filter(
     (t) => t.computedScore >= 60 && t.status !== "completed" && t.status !== "mitigated" && t.status !== "COMPLETED"
@@ -1299,6 +1487,361 @@ export function DashboardPage() {
       )}
 
       {/* =========================================================================
+          ZONE 2.5: OVERARCHING GOALS & MILESTONES
+          ========================================================================= */}
+      <section id="overarching-goals" className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-[#28251d]/12">
+          <div className="flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-[#01696f]" />
+            <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+              Overarching Goals & Milestones
+            </h4>
+          </div>
+          <button
+            onClick={() => {
+              setGoalIdToEdit(null);
+              setGoalTitle("");
+              setGoalDescription("");
+              setGoalTargetType("task-completion");
+              setGoalTargetValue("");
+              setGoalCurrentValue("");
+              setGoalDeadline("");
+              setIsGoalFormOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold text-[#01696f] hover:text-[#005156] bg-transparent hover:underline cursor-pointer border-none"
+          >
+            <Plus className="w-3 h-3" />
+            <span>Define New Goal</span>
+          </button>
+        </div>
+
+        {loadingGoals ? (
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-8 text-center flex flex-col items-center justify-center space-y-3">
+            <span className="w-5 h-5 border-2 border-[#01696f] border-t-transparent rounded-full animate-spin"></span>
+            <p className="text-xs text-[#7a7974] font-mono">Loading goals & progress...</p>
+          </div>
+        ) : goals.length === 0 ? (
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 text-center space-y-3">
+            <p className="text-sm text-[#7a7974] max-w-xl mx-auto">
+              No overarching goals defined yet. Group your workload into high-level outcomes to track real, automated completion metrics.
+            </p>
+            <button
+              onClick={() => setIsGoalFormOpen(true)}
+              className="px-4 py-2 bg-[#01696f]/10 hover:bg-[#01696f]/15 text-[#01696f] text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all border-none cursor-pointer"
+            >
+              Create Your First Goal
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {computedGoals.map((g) => {
+              const linkedTasks = g.linkedTasks;
+              const completedTasks = g.completedTasks;
+              const isAtRisk = g.status === "at-risk";
+              const isCompleted = g.computedProgress >= 100;
+
+              return (
+                <div
+                  key={g.goalId}
+                  className={`bg-white border shadow-xs rounded-sm p-5 space-y-4 relative overflow-hidden transition-all hover:border-[#28251d]/25 flex flex-col justify-between ${
+                    isAtRisk ? "border-amber-200" : "border-[#28251d]/12"
+                  }`}
+                >
+                  {/* Goal Accent top border */}
+                  <div className={`absolute top-0 left-0 w-full h-1 ${
+                    isCompleted ? "bg-emerald-600" : isAtRisk ? "bg-amber-500 animate-pulse" : "bg-[#01696f]"
+                  }`} />
+
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <h5 className="font-serif font-bold text-base text-[#28251d] tracking-tight leading-tight truncate">
+                          {g.title}
+                        </h5>
+                        <p className="text-[11px] text-[#7a7974] line-clamp-2 leading-relaxed">
+                          {g.description || "No description provided."}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleEditGoal(g)}
+                          className="p-1 hover:bg-[#f3f0ec] rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors border-none bg-transparent cursor-pointer"
+                          title="Edit goal"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteGoal(g.goalId)}
+                          className="p-1 hover:bg-rose-50 rounded-full text-rose-500 hover:text-rose-700 transition-colors border-none bg-transparent cursor-pointer"
+                          title="Delete goal"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isCompleted ? (
+                        <span className="text-[8px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          Completed
+                        </span>
+                      ) : isAtRisk ? (
+                        <span className="text-[8px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 animate-pulse">
+                          <AlertTriangle className="w-2.5 h-2.5 text-amber-700" />
+                          At Risk
+                        </span>
+                      ) : (
+                        <span className="text-[8px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-[#01696f]/10 text-[#01696f] border border-[#01696f]/20">
+                          Active
+                        </span>
+                      )}
+
+                      <span className="text-[10px] font-mono text-[#7a7974]">
+                        Due {formatDeadlineDate(g.deadline)}
+                      </span>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="space-y-1.5 pt-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-[#28251d]">
+                          {g.computedProgress}% Complete
+                        </span>
+                        <span className="text-[11px] text-[#7a7974] font-mono">
+                          {g.targetType === "task-completion" ? (
+                            `${completedTasks.length}/${linkedTasks.length} tasks`
+                          ) : (
+                            `${g.currentValue || 0} / ${g.targetValue || 0}`
+                          )}
+                        </span>
+                      </div>
+                      <div className="h-2 bg-[#28251d]/5 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 ${
+                            isCompleted ? "bg-emerald-600" : isAtRisk ? "bg-amber-500" : "bg-[#01696f]"
+                          }`}
+                          style={{ width: `${Math.min(g.computedProgress, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Linked Tasks list */}
+                  <div className="pt-3 border-t border-[#28251d]/5 space-y-2 mt-2">
+                    <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#7a7974] block">
+                      Linked Tasks
+                    </span>
+
+                    {linkedTasks.length === 0 ? (
+                      <p className="text-[11px] text-[#7a7974] italic">
+                        No tasks linked to this goal yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-[110px] overflow-y-auto pr-1">
+                        {linkedTasks.map((t) => {
+                          const done = t.status === "completed" || t.status === "COMPLETED";
+                          return (
+                            <div key={t.taskId} className="flex items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${done ? "bg-emerald-500" : "bg-[#01696f]"}`} />
+                                <span className={`truncate ${done ? "line-through text-[#7a7974]" : "text-[#28251d] font-medium"}`}>
+                                  {t.title}
+                                </span>
+                              </div>
+                              <span className="text-[9px] font-mono text-[#7a7974] uppercase shrink-0">
+                                {t.status === "completed" || t.status === "COMPLETED" ? "Done" : t.priority}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Quick Link Task Button / Select */}
+                    <div className="pt-2">
+                      {linkingGoalId === g.goalId ? (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <select
+                            value={selectedTaskIdToLink}
+                            onChange={(e) => setSelectedTaskIdToLink(e.target.value)}
+                            className="flex-1 px-2 py-1 text-[11px] text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 rounded-sm focus:outline-none"
+                          >
+                            <option value="">-- Select Task --</option>
+                            {tasks
+                              .filter((t) => t.goalId !== g.goalId)
+                              .map((t) => (
+                                <option key={t.taskId} value={t.taskId}>
+                                  {t.title}
+                                </option>
+                              ))}
+                          </select>
+                          <button
+                            onClick={() => handleLinkTaskToGoal(g.goalId, selectedTaskIdToLink)}
+                            disabled={!selectedTaskIdToLink}
+                            className="px-2 py-1 bg-[#01696f] text-white text-[10px] font-mono font-bold rounded-sm border-none cursor-pointer disabled:opacity-50"
+                          >
+                            Link
+                          </button>
+                          <button
+                            onClick={() => {
+                              setLinkingGoalId(null);
+                              setSelectedTaskIdToLink("");
+                            }}
+                            className="p-1 hover:bg-[#f3f0ec] rounded-sm text-[#7a7974] border-none bg-transparent cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setLinkingGoalId(g.goalId)}
+                          className="inline-flex items-center gap-1 text-[10px] font-mono text-[#01696f] hover:text-[#005156] bg-transparent hover:underline cursor-pointer border-none"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Link existing task</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* =========================================================================
+          GOAL CREATION / EDIT MODAL
+          ========================================================================= */}
+      {isGoalFormOpen && (
+        <div className="fixed inset-0 bg-[#28251d]/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white border border-[#28251d]/12 max-w-md w-full p-6 sm:p-8 rounded-sm shadow-xl space-y-5 animate-slide-up relative">
+            <button
+              onClick={() => setIsGoalFormOpen(false)}
+              className="absolute top-4 right-4 p-1.5 hover:bg-[#28251d]/5 rounded-full text-[#7a7974] hover:text-[#28251d] transition-colors cursor-pointer border-none bg-transparent"
+              title="Close modal"
+            >
+              <X className="w-4.5 h-4.5" />
+            </button>
+
+            <div className="space-y-1.5 text-left">
+              <h3 className="text-xl font-serif font-bold text-[#28251d]">
+                {goalIdToEdit ? "Modify Overarching Goal" : "Define Overarching Goal"}
+              </h3>
+              <p className="text-sm text-[#7a7974]">
+                Create a high-level outcome to group your actionable tasks under.
+              </p>
+            </div>
+
+            <form onSubmit={handleSubmitGoal} className="space-y-4">
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Goal Title
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g., Deliver Q3 Integration Release"
+                  value={goalTitle}
+                  onChange={(e) => setGoalTitle(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm text-[#28251d] placeholder:text-[#7a7974]/40 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/25 focus:border-[#01696f] rounded-sm focus:ring-0 focus:outline-none transition-all"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Goal Description
+                </label>
+                <textarea
+                  placeholder="What is the definition of success for this high-level outcome?"
+                  value={goalDescription}
+                  onChange={(e) => setGoalDescription(e.target.value)}
+                  rows={2}
+                  className="w-full px-3 py-2.5 text-sm text-[#28251d] placeholder:text-[#7a7974]/40 bg-[#f9f8f5] border border-[#28251d]/12 hover:border-[#28251d]/25 focus:border-[#01696f] rounded-sm focus:ring-0 focus:outline-none transition-all resize-none"
+                />
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Measurement Target Type
+                </label>
+                <select
+                  value={goalTargetType}
+                  onChange={(e) => setGoalTargetType(e.target.value as any)}
+                  className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                >
+                  <option value="task-completion">Task Completion (Calculates progress based on linked tasks)</option>
+                  <option value="numeric">Numeric Value (Define a custom manual target value)</option>
+                  <option value="milestone">Milestone Binary (0% to 100% manually completed)</option>
+                </select>
+              </div>
+
+              {goalTargetType === "numeric" && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1 text-left">
+                    <label className="text-[11px] font-medium text-[#7a7974] block">
+                      Current Value
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={0}
+                      value={goalCurrentValue}
+                      onChange={(e) => setGoalCurrentValue(e.target.value)}
+                      className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                    />
+                  </div>
+                  <div className="space-y-1 text-left">
+                    <label className="text-[11px] font-medium text-[#7a7974] block">
+                      Target Value
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={goalTargetValue}
+                      onChange={(e) => setGoalTargetValue(e.target.value)}
+                      className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Goal Deadline
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={goalDeadline}
+                  onChange={(e) => setGoalDeadline(e.target.value)}
+                  className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                />
+              </div>
+
+              <div className="pt-4 border-t border-[#28251d]/8 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsGoalFormOpen(false)}
+                  className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider text-[#7a7974] hover:text-[#28251d] bg-transparent border-none cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all border-none cursor-pointer"
+                >
+                  {goalIdToEdit ? "Update Goal" : "Create Goal"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
           ZONE 3: SPOTLIGHT + NEXT ACTIONS
           ========================================================================= */}
       {tasks.length > 0 && (
@@ -1314,9 +1857,17 @@ export function DashboardPage() {
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#28251d]/8">
                   <div className="space-y-1">
-                    <span className="text-[10px] font-mono font-bold tracking-widest uppercase bg-[#01696f]/10 text-[#01696f] px-2 py-0.5 rounded-sm inline-block">
-                      {spotlightTask.category}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-mono font-bold tracking-widest uppercase bg-[#01696f]/10 text-[#01696f] px-2 py-0.5 rounded-sm inline-block">
+                        {spotlightTask.category}
+                      </span>
+                      {spotlightTask.goalId && goals.find((g) => g.goalId === spotlightTask.goalId) && (
+                        <span className="text-[9px] font-mono font-bold tracking-widest uppercase bg-amber-500/10 text-[#7c2d12] px-2 py-0.5 rounded-sm inline-flex items-center gap-1 border border-amber-500/20">
+                          <Trophy className="w-2.5 h-2.5 text-amber-600" />
+                          Goal: {goals.find((g) => g.goalId === spotlightTask.goalId)?.title}
+                        </span>
+                      )}
+                    </div>
                     <h3 className="text-xl font-serif font-bold text-[#28251d] tracking-tight">
                       {spotlightTask.title}
                     </h3>
@@ -1600,6 +2151,12 @@ export function DashboardPage() {
 
                           <p className="text-[11px] text-[#7a7974]">
                             {t.category} · {formatDeadlineDate(t.deadline)}
+                            {t.goalId && goals.find((g) => g.goalId === t.goalId) && (
+                              <span className="text-[9px] text-[#7c2d12] font-semibold ml-1.5 inline-flex items-center gap-0.5 bg-amber-500/10 px-1 rounded-sm border border-amber-500/10">
+                                <Trophy className="w-2.5 h-2.5 text-amber-600" />
+                                {goals.find((g) => g.goalId === t.goalId)?.title}
+                              </span>
+                            )}
                           </p>
                         </div>
                         <Link
@@ -2291,6 +2848,27 @@ export function DashboardPage() {
                 </select>
                 <p className="text-[10px] text-[#7a7974] italic pl-1">
                   If selected, this task will show as Blocked until the prerequisite task is completed.
+                </p>
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] font-medium text-[#7a7974] block">
+                  Goal Linkage (Optional)
+                </label>
+                <select
+                  value={selectedGoalIdForTask}
+                  onChange={(e) => setSelectedGoalIdForTask(e.target.value)}
+                  className="w-full px-3 py-2 text-sm text-[#28251d] bg-[#f9f8f5] border border-[#28251d]/12 focus:border-[#01696f] focus:outline-none rounded-sm"
+                >
+                  <option value="">-- No Linked Goal --</option>
+                  {computedGoals.map((g) => (
+                    <option key={g.goalId} value={g.goalId}>
+                      {g.title} ({g.computedProgress}%)
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-[#7a7974] italic pl-1">
+                  Connect this task to an overarching goal. Completing this task will automatically advance the goal's progress.
                 </p>
               </div>
 

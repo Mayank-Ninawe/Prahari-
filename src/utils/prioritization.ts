@@ -1,4 +1,4 @@
-import { TaskDocument } from "../services/firebaseService";
+import { TaskDocument, GoalDocument } from "../services/firebaseService";
 
 export interface RankedTask extends TaskDocument {
   computedScore: number;
@@ -30,8 +30,9 @@ const parseDateToMillis = (d: any): number => {
  * 4. Effort Awareness (Quick wins: up to 15 points)
  * 5. Blocker & Prerequisite State (Blocked tasks penalized; prerequisites elevated: +/-35 points)
  * 6. Task Status (Completed/mitigated tasks relegated)
+ * 7. Goal Linkage (Tasks linked to at-risk or active goals elevated: +15 to +30 points)
  */
-export function rankTasks(tasks: TaskDocument[]): RankedTask[] {
+export function rankTasks(tasks: TaskDocument[], goals?: GoalDocument[]): RankedTask[] {
   const now = Date.now();
   
   // 1. Initial mapping to preserve all fields and identify block relationships
@@ -163,6 +164,20 @@ export function rankTasks(tasks: TaskDocument[]): RankedTask[] {
       reasons.push(`Blocked by "${task.blockerTitle}"`);
     }
 
+    // --- FACTOR 6: Goal Linkage Elevation ---
+    if (goals && goals.length > 0 && task.goalId) {
+      const taskGoal = goals.find((g) => g.goalId === task.goalId);
+      if (taskGoal) {
+        if (taskGoal.status === "at-risk") {
+          score += 30;
+          reasons.push(`Linked to At-Risk Goal: "${taskGoal.title}" (+30)`);
+        } else {
+          score += 15;
+          reasons.push(`Linked to Active Goal: "${taskGoal.title}" (+15)`);
+        }
+      }
+    }
+
     task.computedScore += score;
     task.priorityReasons = [...task.priorityReasons, ...reasons];
 
@@ -177,12 +192,14 @@ export function rankTasks(tasks: TaskDocument[]): RankedTask[] {
       const urgentReason = sortedReasons.find(r => r.includes("Due in less") || r.includes("Due within") || r.includes("Overdue"));
       const riskReason = sortedReasons.find(r => r.includes("risk") || r.includes("threat"));
       const dependencyReason = sortedReasons.find(r => r.includes("Dependency Elevation"));
+      const goalReason = sortedReasons.find(r => r.includes("Linked to At-Risk Goal") || r.includes("Linked to Active Goal"));
       const quickWinReason = sortedReasons.find(r => r.includes("Quick win"));
 
       task.primaryReason = 
         dependencyReason ||
         urgentReason ||
         riskReason ||
+        goalReason ||
         quickWinReason ||
         (lowerPriority === "critical" ? "Manually flagged Critical" : "Standard priority level");
     }

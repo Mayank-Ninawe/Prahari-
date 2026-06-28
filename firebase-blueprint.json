@@ -57,6 +57,25 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["planId", "planTitle"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "Represents an overarching user goal that groups and guides tasks",
+      "type": "object",
+      "properties": {
+        "goalId": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetValue": { "type": "integer" },
+        "currentValue": { "type": "integer" },
+        "progressPercent": { "type": "integer" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["goalId", "title", "targetType"]
     }
   },
   "firestore": {
@@ -71,6 +90,10 @@
     "/users/{uid}/tasks/{taskId}/rescuePlans/{planId}": {
       "schema": "RescuePlan",
       "description": "AI-generated rescue plans for a given task"
+    },
+    "/users/{uid}/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "User specific overarching goals"
     }
   }
 }

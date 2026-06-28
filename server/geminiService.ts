@@ -19,6 +19,33 @@ export function getAIClient(customKey?: string): GoogleGenAI | null {
   });
 }
 
+// ─── Circuit Breaker & Cooldown State ──────────────────────────────────────────
+
+let consecutive503Failures = 0;
+let circuitBreakerOpenUntil = 0;
+const BREAKER_FAILURE_THRESHOLD = 3;
+const BREAKER_COOLDOWN_MS = 60 * 1000; // 1 minute cooldown
+
+export function isCircuitBreakerOpen(): boolean {
+  if (Date.now() < circuitBreakerOpenUntil) {
+    return true;
+  }
+  return false;
+}
+
+function recordSuccess() {
+  consecutive503Failures = 0;
+  circuitBreakerOpenUntil = 0;
+}
+
+function recordFailure() {
+  consecutive503Failures++;
+  if (consecutive503Failures >= BREAKER_FAILURE_THRESHOLD) {
+    circuitBreakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+    console.warn(`[Circuit Breaker] OPENED. Cooldown in effect until ${new Date(circuitBreakerOpenUntil).toISOString()}`);
+  }
+}
+
 export async function generateContentWithRetry(
   activeClient: GoogleGenAI,
   options: {
@@ -28,11 +55,17 @@ export async function generateContentWithRetry(
   },
   maxRetries = 3
 ): Promise<any> {
+  if (isCircuitBreakerOpen()) {
+    console.warn(`[Circuit Breaker] Request blocked because circuit breaker is open until ${new Date(circuitBreakerOpenUntil).toISOString()}`);
+    throw new Error("503 UNAVAILABLE: Circuit Breaker Open (Temporary Cooldown in effect)");
+  }
+
   let attempt = 0;
-  let delay = 1000;
   while (true) {
     try {
-      return await activeClient.models.generateContent(options);
+      const result = await activeClient.models.generateContent(options);
+      recordSuccess();
+      return result;
     } catch (err: any) {
       attempt++;
       const errMsg = err?.message || String(err);
@@ -41,6 +74,10 @@ export async function generateContentWithRetry(
       const isQuotaExceeded = errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.toLowerCase().includes("quota") || err?.status === 429;
       const isUnavailable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || err?.status === 503;
       
+      if (isUnavailable || isQuotaExceeded) {
+        recordFailure();
+      }
+
       // If daily quota is exceeded, retry is futile. Fallback immediately. If unavailable, try once then fallback.
       const shouldFallbackNow = isQuotaExceeded || (isUnavailable && attempt >= 1) || attempt >= maxRetries;
       
@@ -48,20 +85,37 @@ export async function generateContentWithRetry(
         if (options.model === "gemini-3.5-flash") {
           console.warn(`[Gemini SDK] gemini-3.5-flash failed (isQuota: ${isQuotaExceeded}, isUnavailable: ${isUnavailable}). Trying fallback model gemini-flash-latest...`);
           try {
-            return await activeClient.models.generateContent({
+            if (isCircuitBreakerOpen()) {
+              throw new Error("503 UNAVAILABLE: Circuit Breaker Open (Temporary Cooldown in effect)");
+            }
+            const result = await activeClient.models.generateContent({
               ...options,
               model: "gemini-flash-latest"
             });
+            recordSuccess();
+            return result;
           } catch (fallbackErr: any) {
             const fallbackErrMsg = fallbackErr?.message || String(fallbackErr);
             console.error("[Gemini SDK] Fallback model gemini-flash-latest also failed, trying gemini-3.1-flash-lite...", fallbackErrMsg);
+            if (fallbackErrMsg.includes("503") || fallbackErrMsg.includes("UNAVAILABLE") || fallbackErr?.status === 503) {
+              recordFailure();
+            }
             try {
-              return await activeClient.models.generateContent({
+              if (isCircuitBreakerOpen()) {
+                throw new Error("503 UNAVAILABLE: Circuit Breaker Open (Temporary Cooldown in effect)");
+              }
+              const result = await activeClient.models.generateContent({
                 ...options,
                 model: "gemini-3.1-flash-lite"
               });
-            } catch (fallbackErr2) {
-              console.error("[Gemini SDK] Fallback model gemini-3.1-flash-lite also failed:", fallbackErr2);
+              recordSuccess();
+              return result;
+            } catch (fallbackErr2: any) {
+              const fallbackErrMsg2 = fallbackErr2?.message || String(fallbackErr2);
+              console.error("[Gemini SDK] Fallback model gemini-3.1-flash-lite also failed:", fallbackErrMsg2);
+              if (fallbackErrMsg2.includes("503") || fallbackErrMsg2.includes("UNAVAILABLE") || fallbackErr2?.status === 503) {
+                recordFailure();
+              }
               throw err;
             }
           }
@@ -69,9 +123,11 @@ export async function generateContentWithRetry(
         throw err;
       }
       
-      console.log(`[Gemini SDK] Retrying in ${delay}ms...`);
+      // Exponential backoff with jitter
+      const jitter = Math.random() * 200; // jitter up to 200ms
+      const delay = Math.min(10000, Math.pow(2, attempt) * 1000 + jitter);
+      console.log(`[Gemini SDK] Retrying in ${Math.round(delay)}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
-      delay *= 2;
     }
   }
 }
