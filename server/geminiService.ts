@@ -19,6 +19,57 @@ export function getAIClient(customKey?: string): GoogleGenAI | null {
   });
 }
 
+export async function generateContentWithRetry(
+  activeClient: GoogleGenAI,
+  options: {
+    model: string;
+    contents: any;
+    config?: any;
+  },
+  maxRetries = 3
+): Promise<any> {
+  let attempt = 0;
+  let delay = 1000;
+  while (true) {
+    try {
+      return await activeClient.models.generateContent(options);
+    } catch (err: any) {
+      attempt++;
+      const errMsg = err?.message || String(err);
+      const isUnavailable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || err?.status === 503;
+      console.warn(`[Gemini SDK] Attempt ${attempt} failed:`, errMsg);
+      
+      if (attempt >= maxRetries) {
+        if (options.model === "gemini-3.5-flash") {
+          console.warn("[Gemini SDK] gemini-3.5-flash failed after retries. Trying fallback model gemini-2.5-flash...");
+          try {
+            return await activeClient.models.generateContent({
+              ...options,
+              model: "gemini-2.5-flash"
+            });
+          } catch (fallbackErr) {
+            console.error("[Gemini SDK] Fallback model gemini-2.5-flash also failed, trying gemini-1.5-flash...", fallbackErr);
+            try {
+              return await activeClient.models.generateContent({
+                ...options,
+                model: "gemini-1.5-flash"
+              });
+            } catch (fallbackErr2) {
+              console.error("[Gemini SDK] Fallback model gemini-1.5-flash also failed:", fallbackErr2);
+              throw err;
+            }
+          }
+        }
+        throw err;
+      }
+      
+      console.log(`[Gemini SDK] Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+  }
+}
+
 let ai = getAIClient();
 if (!ai) {
   console.warn("GEMINI_API_KEY is not defined in environment variables. Gemini features will run in mock/fallback mode.");
@@ -264,7 +315,7 @@ export const GeminiService = {
         Produce a highly precise structured JSON response.
       `;
 
-      const response = await activeClient.models.generateContent({
+      const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -351,7 +402,7 @@ export const GeminiService = {
            - Completion Types: Select operational verification methods ('manual', 'review', 'submit').
       `;
 
-      const response = await activeClient.models.generateContent({
+      const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -416,7 +467,7 @@ export const GeminiService = {
         5. ELIMINATE ALL MOTIVATIONAL ADVICE. Give cold, clinical, high-efficiency engineering steps.
       `;
 
-      const response = await activeClient.models.generateContent({
+      const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -479,7 +530,7 @@ export const GeminiService = {
         Defer non-critical high-effort tasks to later. Output structured IDs in recommended execution order.
       `;
 
-      const response = await activeClient.models.generateContent({
+      const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
@@ -688,7 +739,7 @@ export const GeminiService = {
         - Produce a ranked list of 2 to 4 recommendations. The first must be the most critical, urgent, and actionable.
       `;
 
-      const response = await activeClient.models.generateContent({
+      const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {

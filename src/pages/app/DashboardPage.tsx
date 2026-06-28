@@ -21,6 +21,7 @@ import {
   Zap,
   AlertTriangle,
   TrendingUp,
+  Minimize2,
 } from "lucide-react";
 import { LockedRoute } from "@/config/constants";
 import { useAuth } from "@/components/ui/ProtectedRoute";
@@ -29,6 +30,8 @@ import { GeminiService } from "../../services/gemini";
 import { NotificationService, NotificationDocument, ReminderDecisionContext } from "../../services/notificationService";
 import { DemoService } from "../../services/demoService";
 import { rankTasks, RankedTask } from "../../utils/prioritization";
+import { SchedulingService, ScheduledBlock } from "../../services/schedulingService";
+import { CalendarService } from "../../services/calendarService";
 
 const parseDateToMillis = (d: any): number => {
   if (!d) return 0;
@@ -127,6 +130,267 @@ export function DashboardPage() {
 
   const [recommendationsData, setRecommendationsData] = React.useState<any>(null);
   const [loadingRecommendations, setLoadingRecommendations] = React.useState<boolean>(false);
+
+  // Autonomous Scheduling & Focus Mode States
+  const [busySlots, setBusySlots] = React.useState<any[]>([]);
+  const [calendarConnected, setCalendarConnected] = React.useState<boolean>(CalendarService.isConnected());
+  const [isSolvingSchedule, setIsSolvingSchedule] = React.useState<boolean>(false);
+  const [scheduleMessage, setScheduleMessage] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const [isFocusModeActive, setIsFocusModeActive] = React.useState(false);
+  const [focusTimerSeconds, setFocusTimerSeconds] = React.useState(1500);
+  const [focusTimerRunning, setFocusTimerRunning] = React.useState(false);
+  const [focusStepTitle, setFocusStepTitle] = React.useState<string>("");
+
+  React.useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (focusTimerRunning && focusTimerSeconds > 0) {
+      interval = setInterval(() => {
+        setFocusTimerSeconds((prev) => prev - 1);
+      }, 1000);
+    } else if (focusTimerSeconds === 0) {
+      setFocusTimerRunning(false);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [focusTimerRunning, focusTimerSeconds]);
+
+  const formatFocusTimer = () => {
+    const mins = Math.floor(focusTimerSeconds / 60);
+    const secs = focusTimerSeconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  React.useEffect(() => {
+    setCalendarConnected(CalendarService.isConnected());
+    if (!CalendarService.isConnected() || tasks.length === 0) {
+      return;
+    }
+    const fetchBusy = async () => {
+      try {
+        const now = new Date();
+        const future = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const slots = await CalendarService.fetchBusySlots(now.toISOString(), future.toISOString());
+        setBusySlots(slots);
+      } catch (err) {
+        console.warn("Failed to fetch calendar slots for dashboard:", err);
+      }
+    };
+    fetchBusy();
+  }, [calendarConnected, tasks.length]);
+
+  const handleAutoScheduleAll = async () => {
+    if (!firebaseUser) return;
+    setIsSolvingSchedule(true);
+    setScheduleMessage(null);
+    try {
+      const incomplete = tasks.filter(t => t.status !== "completed" && t.status !== "mitigated" && t.status !== "COMPLETED");
+      if (incomplete.length === 0) {
+        setScheduleMessage({ type: "error", text: "You have no active incomplete tasks to schedule!" });
+        setIsSolvingSchedule(false);
+        return;
+      }
+
+      let cumulativeBlocks: { start: Date; end: Date }[] = [];
+      const updatedTasks: TaskDocument[] = [];
+
+      let currentBusy = [...busySlots];
+      if (calendarConnected) {
+        try {
+          const now = new Date();
+          const future = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+          currentBusy = await CalendarService.fetchBusySlots(now.toISOString(), future.toISOString());
+          setBusySlots(currentBusy);
+        } catch (e) {
+          console.warn("Could not refresh busy slots:", e);
+        }
+      }
+
+      for (const task of incomplete) {
+        let activePlan = null;
+        try {
+          const plans = await FirebaseService.getRescuePlans(firebaseUser.uid, task.taskId);
+          if (plans && plans.length > 0) {
+            const currentSelectedPlanId = task.selectedPlanId;
+            activePlan = plans.find((p) => p.planId === currentSelectedPlanId) || plans[0];
+          }
+        } catch (e) {
+          console.warn("Could not load rescue plans for auto schedule task:", task.title, e);
+        }
+
+        const suggestions = SchedulingService.suggestScheduleForTask(
+          task,
+          currentBusy,
+          cumulativeBlocks,
+          activePlan
+        );
+
+        const bookedBlocks: ScheduledBlock[] = [];
+        for (const block of suggestions) {
+          let calendarEventId = "";
+          if (calendarConnected) {
+            try {
+              const desc = `Autonomous focus block booked by Prahari AI.\nTask: ${task.title}\nBlock focus: ${block.title}\n\nExplanation: ${block.explanation}`;
+              const res = await CalendarService.createRescueBlock({
+                taskTitle: block.title,
+                description: desc,
+                startTime: block.startTime,
+                endTime: block.endTime
+              });
+              if (res && res.id) {
+                calendarEventId = res.id;
+              }
+            } catch (calErr) {
+              console.warn("Failed to book block on Google Calendar:", block.title, calErr);
+            }
+          }
+
+          bookedBlocks.push({
+            ...block,
+            calendarEventId
+          });
+
+          cumulativeBlocks.push({
+            start: new Date(block.startTime),
+            end: new Date(block.endTime)
+          });
+        }
+
+        await FirebaseService.updateTask(firebaseUser.uid, task.taskId, {
+          scheduledBlocks: bookedBlocks
+        });
+
+        updatedTasks.push({
+          ...task,
+          scheduledBlocks: bookedBlocks
+        });
+      }
+
+      setTasks(prev => prev.map(t => {
+        const updated = updatedTasks.find(ut => ut.taskId === t.taskId);
+        return updated ? { ...t, scheduledBlocks: updated.scheduledBlocks } : t;
+      }));
+
+      setScheduleMessage({
+        type: "success",
+        text: `Successfully calculated and locked focus-block scheduling for ${updatedTasks.length} tasks! ${
+          calendarConnected ? "All blocks are synchronized to your Google Calendar." : "Focus slots are saved to your local workspace."
+        }`
+      });
+    } catch (err: any) {
+      console.error("Auto scheduling failed:", err);
+      setScheduleMessage({ type: "error", text: err.message || "Autonomous schedule mapping failed. Please try again." });
+    } finally {
+      setIsSolvingSchedule(false);
+    }
+  };
+
+  const handleClearAllSchedules = async () => {
+    if (!firebaseUser) return;
+    if (!window.confirm("Are you sure you want to clear the scheduled focus blocks for all tasks?")) return;
+    setIsSolvingSchedule(true);
+    setScheduleMessage(null);
+    try {
+      const activeSchedules = tasks.filter(t => t.scheduledBlocks && t.scheduledBlocks.length > 0);
+      for (const task of activeSchedules) {
+        await FirebaseService.updateTask(firebaseUser.uid, task.taskId, {
+          scheduledBlocks: []
+        });
+      }
+      setTasks(prev => prev.map(t => ({ ...t, scheduledBlocks: [] })));
+      setScheduleMessage({ type: "success", text: "Successfully cleared active focus block schedules across all tasks." });
+    } catch (err: any) {
+      console.error(err);
+      setScheduleMessage({ type: "error", text: "Failed to clear schedules." });
+    } finally {
+      setIsSolvingSchedule(false);
+    }
+  };
+
+  const handleScheduleSingleTask = async (task: TaskDocument) => {
+    if (!firebaseUser) return;
+    setIsSolvingSchedule(true);
+    setScheduleMessage(null);
+    try {
+      let currentBusy = [...busySlots];
+      if (calendarConnected) {
+        try {
+          const now = new Date();
+          const future = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+          currentBusy = await CalendarService.fetchBusySlots(now.toISOString(), future.toISOString());
+          setBusySlots(currentBusy);
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+
+      const existingBlocks: { start: Date; end: Date }[] = [];
+      tasks.forEach(t => {
+        if (t.taskId !== task.taskId && t.scheduledBlocks) {
+          t.scheduledBlocks.forEach(b => {
+            existingBlocks.push({ start: new Date(b.startTime), end: new Date(b.endTime) });
+          });
+        }
+      });
+
+      let activePlan = null;
+      try {
+        const plans = await FirebaseService.getRescuePlans(firebaseUser.uid, task.taskId);
+        if (plans && plans.length > 0) {
+          const currentSelectedPlanId = task.selectedPlanId;
+          activePlan = plans.find((p) => p.planId === currentSelectedPlanId) || plans[0];
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+
+      const suggestions = SchedulingService.suggestScheduleForTask(
+        task,
+        currentBusy,
+        existingBlocks,
+        activePlan
+      );
+
+      const bookedBlocks: ScheduledBlock[] = [];
+      for (const block of suggestions) {
+        let calendarEventId = "";
+        if (calendarConnected) {
+          try {
+            const desc = `Autonomous focus block booked by Prahari AI.\nTask: ${task.title}\nBlock focus: ${block.title}\n\nExplanation: ${block.explanation}`;
+            const res = await CalendarService.createRescueBlock({
+              taskTitle: block.title,
+              description: desc,
+              startTime: block.startTime,
+              endTime: block.endTime
+            });
+            if (res && res.id) {
+              calendarEventId = res.id;
+            }
+          } catch (calErr) {
+            console.warn(calErr);
+          }
+        }
+        bookedBlocks.push({ ...block, calendarEventId });
+      }
+
+      await FirebaseService.updateTask(firebaseUser.uid, task.taskId, {
+        scheduledBlocks: bookedBlocks
+      });
+
+      setTasks(prev => prev.map(t => t.taskId === task.taskId ? { ...t, scheduledBlocks: bookedBlocks } : t));
+
+      setScheduleMessage({
+        type: "success",
+        text: `Successfully scheduled focus blocks for "${task.title}"!`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setScheduleMessage({ type: "error", text: "Failed to schedule task focus blocks." });
+    } finally {
+      setIsSolvingSchedule(false);
+    }
+  };
 
   const loadRecommendations = async (taskList: any[]) => {
     if (!taskList || taskList.length === 0) {
@@ -640,6 +904,27 @@ export function DashboardPage() {
     };
     return map[type] || type.replace(/_/g, " ");
   };
+
+  const allScheduledBlocks: ScheduledBlock[] = [];
+  tasks.forEach((task) => {
+    if (
+      task.status !== "completed" &&
+      task.status !== "mitigated" &&
+      task.status !== "COMPLETED" &&
+      task.scheduledBlocks
+    ) {
+      task.scheduledBlocks.forEach((block) => {
+        allScheduledBlocks.push({
+          ...block,
+          taskTitle: task.title,
+        });
+      });
+    }
+  });
+
+  allScheduledBlocks.sort(
+    (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+  );
 
   return (
     <div
@@ -1244,19 +1529,32 @@ export function DashboardPage() {
                   </div>
                 )}
 
-                <div className="pt-2 flex items-center justify-between gap-4">
-                  <Link
-                    to={LockedRoute.RESCUE}
-                    state={{ taskId: spotlightTask.taskId }}
-                    className="inline-flex items-center justify-center w-full sm:w-auto bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider px-5 py-2.5 rounded-sm transition-all shadow-sm hover:translate-x-0.5 border-none"
-                  >
-                    <span>Open rescue plan</span>
-                    <ArrowUpRight className="w-3.5 h-3.5 ml-1.5" />
-                  </Link>
+                <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Link
+                      to={LockedRoute.RESCUE}
+                      state={{ taskId: spotlightTask.taskId }}
+                      className="inline-flex items-center justify-center w-full sm:w-auto bg-[#01696f] hover:bg-[#005156] text-white text-[11px] font-mono font-bold uppercase tracking-wider px-5 py-2.5 rounded-sm transition-all shadow-sm hover:translate-x-0.5 border-none"
+                    >
+                      <span>Open rescue plan</span>
+                      <ArrowUpRight className="w-3.5 h-3.5 ml-1.5" />
+                    </Link>
+
+                    {(!spotlightTask.scheduledBlocks || spotlightTask.scheduledBlocks.length === 0) && (
+                      <button
+                        onClick={() => handleScheduleSingleTask(spotlightTask)}
+                        disabled={isSolvingSchedule}
+                        className="inline-flex items-center justify-center w-full sm:w-auto border border-[#01696f]/30 hover:border-[#01696f] hover:bg-[#01696f]/5 bg-transparent text-[#01696f] text-[11px] font-mono font-bold uppercase tracking-wider px-5 py-2.5 rounded-sm transition-all shadow-sm cursor-pointer"
+                      >
+                        <Clock className="w-3.5 h-3.5 mr-1.5" />
+                        <span>Schedule Blocks</span>
+                      </button>
+                    )}
+                  </div>
 
                   <button
                     onClick={(e) => handleDeleteTask(spotlightTask.taskId, e)}
-                    className="p-3 border border-rose-200 hover:border-rose-400 bg-transparent text-rose-600 hover:text-rose-800 transition-colors rounded-sm cursor-pointer"
+                    className="p-3 border border-rose-200 hover:border-rose-400 bg-transparent text-rose-600 hover:text-rose-800 transition-colors rounded-sm cursor-pointer ml-auto"
                     title="Delete task"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -1418,6 +1716,207 @@ export function DashboardPage() {
           </div>
         </section>
       )}
+
+      {/* =========================================================================
+          AUTONOMOUS FOCUS SCHEDULE SECTION
+          ========================================================================= */}
+      <section id="autonomous-focus-schedule" className="space-y-4">
+        <div className="flex items-center justify-between pb-1 border-b border-[#28251d]/12">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-[#01696f]" />
+            <h4 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+              Autonomous Focus Schedule
+            </h4>
+          </div>
+          {allScheduledBlocks.length > 0 && (
+            <button
+              onClick={handleClearAllSchedules}
+              disabled={isSolvingSchedule}
+              className="text-[10px] font-mono text-rose-700 hover:text-rose-900 bg-transparent hover:underline cursor-pointer border-none"
+            >
+              Reset Schedule
+            </button>
+          )}
+        </div>
+
+        {scheduleMessage && (
+          <div className={`p-4 rounded-sm text-xs border leading-relaxed flex items-start gap-2.5 ${
+            scheduleMessage.type === "success"
+              ? "bg-[#01696f]/5 border-[#01696f]/25 text-[#01696f]"
+              : "bg-rose-50 border-rose-200 text-rose-800"
+          }`}>
+            <Sparkles className="w-4.5 h-4.5 shrink-0 text-[#01696f]" />
+            <div>
+              <p className="font-semibold">{scheduleMessage.type === "success" ? "Schedule Solver Complete" : "Scheduling Alert"}</p>
+              <p className="mt-0.5">{scheduleMessage.text}</p>
+            </div>
+          </div>
+        )}
+
+        {isSolvingSchedule ? (
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-12 text-center flex flex-col items-center justify-center space-y-4">
+            <div className="relative w-10 h-10">
+              <div className="absolute inset-0 border-2 border-[#d4d1ca] rounded-full"></div>
+              <div className="absolute inset-0 border-2 border-[#01696f] border-t-transparent rounded-full animate-spin"></div>
+            </div>
+            <p className="text-xs font-mono text-[#7a7974] animate-pulse">
+              Mapping optimal slots, scanning calendar conflicts, and writing time blocks...
+            </p>
+          </div>
+        ) : allScheduledBlocks.length === 0 ? (
+          <div className="bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-8 text-center space-y-5 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-[#d4d1ca]"></div>
+            <div className="w-12 h-12 bg-[#28251d]/5 rounded-full flex items-center justify-center mx-auto text-[#7a7974]">
+              <Clock className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-2 max-w-md mx-auto">
+              <h5 className="font-serif font-bold text-base text-[#28251d]">
+                No Focus Blocks Booked Yet
+              </h5>
+              <p className="text-xs text-[#7a7974] leading-relaxed">
+                Prahari can divide your estimated workload into focused sessions and auto-schedule them around your existing calendar meetings and commitments.
+              </p>
+            </div>
+
+            <div className="flex justify-center gap-3 pt-1">
+              <button
+                onClick={handleAutoScheduleAll}
+                className="inline-flex items-center gap-2 bg-[#28251d] hover:bg-[#01696f] text-white px-5 py-2.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm transition-all shadow-sm hover:-translate-y-0.5 cursor-pointer border-none"
+              >
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Auto-Schedule All Workload ({totalEstimatedHours}h)</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid lg:grid-cols-12 gap-6 items-start">
+            {/* Left side: Timeline list of scheduled blocks */}
+            <div className="lg:col-span-8 bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-[#28251d]/8 pb-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+                  Weekly Focus Blocks Sequence
+                </span>
+                <span className="text-[10px] font-mono text-[#01696f] bg-[#01696f]/10 px-2 py-0.5 rounded-sm font-bold">
+                  {allScheduledBlocks.length} Sessions Scheduled
+                </span>
+              </div>
+
+              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                {allScheduledBlocks.map((block, idx) => {
+                  const start = new Date(block.startTime);
+                  const end = new Date(block.endTime);
+                  const isToday = start.toDateString() === new Date().toDateString();
+
+                  return (
+                    <div
+                      key={block.blockId || idx}
+                      className={`group p-4 border rounded-sm text-left transition-all duration-200 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between ${
+                        isToday
+                          ? "bg-[#01696f]/3 border-[#01696f]/20 hover:border-[#01696f]/35 animate-pulse-subtle"
+                          : "bg-white border-[#28251d]/10 hover:border-[#28251d]/20"
+                      }`}
+                    >
+                      <div className="space-y-2 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-sm ${
+                            isToday
+                              ? "bg-[#01696f] text-white"
+                              : "bg-[#f3f0ec] text-[#7a7974]"
+                          }`}>
+                            {isToday ? "Today" : start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                          </span>
+                          <span className="text-xs font-mono font-bold text-amber-800 bg-amber-500/10 px-1.5 py-0.5 rounded-sm">
+                            {start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="text-[10px] font-mono text-[#7a7974] bg-neutral-100 px-1.5 py-0.5 rounded-sm">
+                            {block.durationMinutes} mins
+                          </span>
+                        </div>
+
+                        <div className="space-y-0.5">
+                          <h5 className="text-sm font-bold text-[#28251d]">
+                            {block.title}
+                          </h5>
+                          <p className="text-[11px] text-[#7a7974] line-clamp-1">
+                            Associated Task: <span className="font-semibold text-[#28251d]">{block.taskTitle}</span>
+                          </p>
+                        </div>
+
+                        <p className="text-xs text-[#55534e] bg-[#f9f8f5]/60 p-2.5 border border-black/5 rounded-sm italic leading-relaxed">
+                          {block.explanation}
+                        </p>
+                      </div>
+
+                      <div className="flex sm:flex-col gap-2 shrink-0 w-full sm:w-auto items-stretch sm:items-end">
+                        <button
+                          onClick={() => {
+                            setFocusStepTitle(block.title);
+                            setFocusTimerSeconds(block.durationMinutes * 60);
+                            setIsFocusModeActive(true);
+                            setFocusTimerRunning(true);
+                          }}
+                          className="flex-1 py-2 px-3 bg-[#28251d] hover:bg-[#01696f] text-white text-[10px] font-mono font-bold uppercase tracking-wider rounded-sm text-center cursor-pointer border-none transition-colors"
+                        >
+                          Start Focus
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Right side: Mini statistics & solver settings */}
+            <div className="lg:col-span-4 bg-white border border-[#28251d]/12 shadow-sm rounded-sm p-6 space-y-5 text-left">
+              <div className="border-b border-[#28251d]/8 pb-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#7a7974]">
+                  Timeline Analytics
+                </span>
+              </div>
+
+              <div className="space-y-4 text-sm">
+                <div className="p-3.5 bg-[#fcfbf9] border border-[#28251d]/6 rounded-sm space-y-3">
+                  <div className="flex justify-between items-center pb-1.5 border-b border-[#28251d]/5 text-xs text-[#7a7974]">
+                    <span>Standard Work Windows</span>
+                    <span className="font-mono font-bold">9:00 AM - 6:00 PM</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-1.5 border-b border-[#28251d]/5 text-xs text-[#7a7974]">
+                    <span>Weekly Blocked Slots</span>
+                    <span className="font-mono font-bold text-amber-800">
+                      {(busySlots.reduce((acc, s) => {
+                        const sTime = new Date(s.start).getTime();
+                        const eTime = new Date(s.end).getTime();
+                        return acc + Math.max(0, (eTime - sTime) / (1000 * 60));
+                      }, 0) / 60).toFixed(1)} hours
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs text-[#7a7974]">
+                    <span>Allocated Focus Time</span>
+                    <span className="font-mono font-bold text-[#01696f]">
+                      {(allScheduledBlocks.reduce((acc, b) => acc + b.durationMinutes, 0) / 60).toFixed(1)} hours
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs text-[#7a7974] leading-relaxed">
+                    Need to modify or add additional deadlines? Run the solver again to automatically shift and accommodate new requirements.
+                  </p>
+                  
+                  <button
+                    onClick={handleAutoScheduleAll}
+                    disabled={isSolvingSchedule}
+                    className="w-full py-2.5 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white text-[11px] font-mono font-bold uppercase tracking-wider rounded-sm text-center cursor-pointer border-none transition-colors"
+                  >
+                    Recalculate & Re-Block Workload
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* =========================================================================
           ZONE 4: SECONDARY INSIGHTS
@@ -1855,6 +2354,97 @@ export function DashboardPage() {
                 Delete task
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Focus Mode Stage Fullscreen Overlay */}
+      {isFocusModeActive && (
+        <div
+          id="focus-mode-stage"
+          className="fixed inset-0 bg-[#171614] text-[#f9f8f4] z-50 flex flex-col justify-between p-8 sm:p-16 animate-fade-in font-sans"
+        >
+          <div className="flex items-center justify-between border-b border-white/10 pb-6 shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-[#4f98a3] text-[#171614] rounded-sm flex items-center justify-center">
+                <Zap className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-wide text-[#f9f8f4]">
+                  Focus mode
+                </h2>
+                <p className="text-[11px] text-white/55">Prahari Autonomous Session</p>
+              </div>
+            </div>
+
+            <button
+              id="exit-focus-shell-btn"
+              onClick={() => {
+                setIsFocusModeActive(false);
+                setFocusTimerRunning(false);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-white/15 hover:border-white/35 hover:bg-white/5 text-white/80 hover:text-white rounded-sm text-xs transition-colors cursor-pointer bg-transparent"
+            >
+              <Minimize2 className="w-3.5 h-3.5" />
+              <span>Exit focus mode</span>
+            </button>
+          </div>
+
+          <div className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-12 max-w-5xl mx-auto w-full my-8">
+            <div className="flex-1 space-y-6 w-full text-left">
+              <div className="space-y-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] bg-white/5 border border-white/10 text-white/80 px-2.5 py-1 rounded-sm">
+                  <Sparkles className="w-3.5 h-3.5 text-[#4f98a3]" />
+                  Current Focus Block
+                </span>
+                <h3 className="text-2xl sm:text-3xl font-semibold tracking-tight text-white">
+                  {focusStepTitle || "Focus Session"}
+                </h3>
+              </div>
+
+              <p className="text-sm text-white/70 leading-relaxed max-w-xl bg-white/5 p-6 rounded-sm border border-white/10">
+                "Stay with this single focus session until the timer ends. Shield your mind from the rest of the workload."
+              </p>
+            </div>
+
+            <div className="w-80 flex flex-col items-center justify-center bg-black/20 border border-white/10 p-10 rounded-sm relative shadow-2xl">
+              <div className="absolute top-4 left-4 text-[9px] tracking-widest text-white/35 uppercase font-medium">
+                Active session
+              </div>
+
+              <div className="text-6xl font-mono text-white font-bold tracking-tight my-6 select-none">
+                {formatFocusTimer()}
+              </div>
+
+              <div className="flex gap-4 w-full">
+                <button
+                  id="timer-toggle-btn"
+                  onClick={() => setFocusTimerRunning(!focusTimerRunning)}
+                  className={`flex-1 py-2.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
+                    focusTimerRunning
+                      ? "bg-[#a13544] hover:bg-[#782b33] text-white"
+                      : "bg-white text-[#171614] hover:bg-[#e6e4df]"
+                  }`}
+                >
+                  {focusTimerRunning ? "Pause" : "Start"}
+                </button>
+                <button
+                  id="timer-reset-btn"
+                  onClick={() => {
+                    setFocusTimerSeconds(1500);
+                    setFocusTimerRunning(false);
+                  }}
+                  className="px-4 py-2.5 bg-white/8 text-white/80 hover:bg-white/12 rounded-sm text-xs font-medium transition-all cursor-pointer"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 pt-6 flex items-center justify-between text-[11px] text-white/40 shrink-0">
+            <span>Prahari AI Active</span>
+            <span>Stay on one task until the timer ends</span>
           </div>
         </div>
       )}

@@ -58,6 +58,18 @@ export interface TaskDocument {
   totalStepsCount?: number;
   prerequisiteTaskId?: string;
   survivalGoal?: string;
+  scheduledBlocks?: {
+    blockId: string;
+    taskId: string;
+    taskTitle: string;
+    title: string;
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+    explanation: string;
+    isRescueBlock?: boolean;
+    calendarEventId?: string;
+  }[];
 }
 
 export interface RescuePlanDocument {

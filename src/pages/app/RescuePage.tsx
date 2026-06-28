@@ -32,6 +32,8 @@ import { Card, Badge, Button } from "../../components/ui/BaseComponents";
 import { ExportHelper } from "../../utils/exportHelper";
 import { LockedRoute } from "@/config/constants";
 import { CalendarService } from "../../services/calendarService";
+import { SchedulingService, ScheduledBlock } from "../../services/schedulingService";
+
 
 export function RescuePage() {
   const { firebaseUser, userDoc } = useAuth();
@@ -71,6 +73,10 @@ export function RescuePage() {
   } | null>(null);
   const [schedulingBlock, setSchedulingBlock] = useState<boolean>(false);
   const [calendarMessage, setCalendarMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const [busySlots, setBusySlots] = useState<any[]>([]);
+  const [suggestedBlocks, setSuggestedBlocks] = useState<ScheduledBlock[] | null>(null);
+  const [approvingSchedule, setApprovingSchedule] = useState<boolean>(false);
 
   useEffect(() => {
     if (!firebaseUser) return;
@@ -166,6 +172,7 @@ export function RescuePage() {
 
         // Fetch busy slots between now and deadline
         const slots = await CalendarService.fetchBusySlots(now.toISOString(), deadlineDate.toISOString());
+        setBusySlots(slots);
         
         // Analyze conflicts
         const report = CalendarService.checkConflicts(now, deadlineDate, slots);
@@ -212,34 +219,82 @@ export function RescuePage() {
   };
 
   const handleScheduleRescueBlock = async () => {
-    if (!selectedTask || !CalendarService.isConnected()) return;
+    if (!selectedTask) return;
     setSchedulingBlock(true);
     setCalendarMessage(null);
     try {
       const now = new Date();
-      // Schedule a 90-minute block starting 15 minutes from now
-      const startTime = new Date(now.getTime() + 15 * 60 * 1000);
-      const endTime = new Date(startTime.getTime() + 90 * 60 * 1000);
+      
+      let deadlineDate = new Date();
+      if (selectedTask.deadline) {
+        if (selectedTask.deadline instanceof Date) {
+          deadlineDate = selectedTask.deadline;
+        } else if (typeof (selectedTask.deadline as any).toDate === "function") {
+          deadlineDate = (selectedTask.deadline as any).toDate();
+        } else {
+          deadlineDate = new Date(selectedTask.deadline as any);
+        }
+      }
 
-      const description = `Strategic focus slot booked by Prahari AI.\nTask Title: ${selectedTask.title}\nDescription: ${selectedTask.description || "No description"}\nEffort Required: ${selectedTask.estimatedMinutes} mins.`;
-
-      await CalendarService.createRescueBlock({
-        taskTitle: selectedTask.title,
-        description,
-        startTime: startTime.toISOString(),
-        endTime: endTime.toISOString()
+      // Find the earliest conflict free slot for a 90-min rescue block
+      const result = SchedulingService.findNextAvailableSlot({
+        durationMinutes: 90,
+        startFrom: now,
+        deadline: deadlineDate,
+        busySlots,
+        existingBlocks: [],
+        isRescue: true // true because it's a high urgency rescue block!
       });
+
+      const description = `Immediate rescue block booked by Prahari AI.\nTask Title: ${selectedTask.title}\nDescription: ${selectedTask.description || "No description"}\nExplanation: ${result.explanation}`;
+
+      let calendarEventId = "";
+      if (calendarConnected) {
+        const res = await CalendarService.createRescueBlock({
+          taskTitle: `Rescue: ${selectedTask.title}`,
+          description,
+          startTime: result.start.toISOString(),
+          endTime: result.end.toISOString()
+        });
+        if (res && res.id) {
+          calendarEventId = res.id;
+        }
+      }
+
+      const newBlock: ScheduledBlock = {
+        blockId: `${selectedTask.taskId}_rescue_block_${Math.random().toString(36).substring(2, 6)}`,
+        taskId: selectedTask.taskId,
+        taskTitle: selectedTask.title,
+        title: `Rescue Block: ${selectedTask.title}`,
+        startTime: result.start.toISOString(),
+        endTime: result.end.toISOString(),
+        durationMinutes: 90,
+        explanation: result.explanation,
+        isRescueBlock: true,
+        calendarEventId
+      };
+
+      const existingBlocks = selectedTask.scheduledBlocks || [];
+      const updatedBlocks = [...existingBlocks, newBlock];
+
+      // Save to Firebase
+      if (firebaseUser) {
+        await FirebaseService.updateTask(firebaseUser.uid, selectedTask.taskId, {
+          scheduledBlocks: updatedBlocks
+        });
+
+        // Update local tasks state
+        setTasks(prev => prev.map(t => t.taskId === selectedTask.taskId ? { ...t, scheduledBlocks: updatedBlocks } : t));
+      }
 
       setCalendarMessage({
         type: "success",
-        text: `📅 Successfully scheduled 90-minute rescue slot: ${startTime.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})} - ${endTime.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})}!`
+        text: `📅 Real rescue block scheduled: ${result.start.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})} - ${result.end.toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"})}! \nExplanation: ${result.explanation}`
       });
 
-      // Refetch busy slots to show updated availability metrics instantly
-      const deadlineDate = selectedTask.deadline instanceof Date 
-        ? selectedTask.deadline 
-        : (typeof (selectedTask.deadline as any).toDate === "function" ? (selectedTask.deadline as any).toDate() : new Date(selectedTask.deadline as any));
+      // Refetch busy slots
       const slots = await CalendarService.fetchBusySlots(now.toISOString(), deadlineDate.toISOString());
+      setBusySlots(slots);
       const report = CalendarService.checkConflicts(now, deadlineDate, slots);
       const totalTimeMinutes = Math.max(0, (deadlineDate.getTime() - now.getTime()) / (1000 * 60));
       setConflictReport({
@@ -249,7 +304,7 @@ export function RescuePage() {
         totalTimeMinutes,
       });
 
-      setTimeout(() => setCalendarMessage(null), 8000);
+      setTimeout(() => setCalendarMessage(null), 10000);
     } catch (err: any) {
       console.error(err);
       setCalendarMessage({
@@ -260,6 +315,114 @@ export function RescuePage() {
       setSchedulingBlock(false);
     }
   };
+
+  const handleGenerateSuggestedSchedule = () => {
+    if (!selectedTask) return;
+    try {
+      const suggestions = SchedulingService.suggestScheduleForTask(
+        selectedTask,
+        busySlots,
+        [],
+        activePlan
+      );
+      setSuggestedBlocks(suggestions);
+      setCalendarMessage({
+        type: "success",
+        text: `⚡ Generated ${suggestions.length} custom focus block suggestions based on your priority and calendar availability!`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setCalendarMessage({
+        type: "error",
+        text: "Could not calculate custom focus blocks."
+      });
+    }
+  };
+
+  const handleApproveAndSaveSchedule = async () => {
+    if (!firebaseUser || !selectedTask || !suggestedBlocks) return;
+    setApprovingSchedule(true);
+    setCalendarMessage(null);
+    try {
+      const bookedBlocks: ScheduledBlock[] = [];
+      
+      for (const block of suggestedBlocks) {
+        let calendarEventId = "";
+        
+        if (calendarConnected) {
+          const desc = `Autonomous focus block booked by Prahari AI.\nTask: ${selectedTask.title}\nBlock focus: ${block.title}\n\nExplanation: ${block.explanation}`;
+          const res = await CalendarService.createRescueBlock({
+            taskTitle: block.title,
+            description: desc,
+            startTime: block.startTime,
+            endTime: block.endTime
+          });
+          if (res && res.id) {
+            calendarEventId = res.id;
+          }
+        }
+        
+        bookedBlocks.push({
+          ...block,
+          calendarEventId
+        });
+      }
+
+      // Save to task in Firestore
+      await FirebaseService.updateTask(firebaseUser.uid, selectedTask.taskId, {
+        scheduledBlocks: bookedBlocks
+      });
+
+      // Update local task state
+      setTasks(prev => prev.map(t => t.taskId === selectedTask.taskId ? { ...t, scheduledBlocks: bookedBlocks } : t));
+      
+      setSuggestedBlocks(null);
+      setCalendarMessage({
+        type: "success",
+        text: `🎉 Successfully approved and scheduled ${bookedBlocks.length} focus blocks into your calendar and recovery plan!`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setCalendarMessage({
+        type: "error",
+        text: err.message || "Failed to commit scheduled blocks."
+      });
+    } finally {
+      setApprovingSchedule(false);
+    }
+  };
+
+  const handleClearSchedule = async () => {
+    if (!firebaseUser || !selectedTask) return;
+    if (!window.confirm("Are you sure you want to clear the active focus block schedule for this task?")) return;
+    
+    setApprovingSchedule(true);
+    setCalendarMessage(null);
+    try {
+      // Clear in firestore
+      await FirebaseService.updateTask(firebaseUser.uid, selectedTask.taskId, {
+        scheduledBlocks: []
+      });
+
+      // Update local task state
+      setTasks(prev => prev.map(t => t.taskId === selectedTask.taskId ? { ...t, scheduledBlocks: [] } : t));
+      setSuggestedBlocks(null);
+
+      setCalendarMessage({
+        type: "success",
+        text: "Schedule cleared successfully. Ready for rescheduling."
+      });
+    } catch (err: any) {
+      console.error(err);
+      setCalendarMessage({
+        type: "error",
+        text: "Could not clear existing schedule."
+      });
+    } finally {
+      setApprovingSchedule(false);
+    }
+  };
+
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -1020,18 +1183,18 @@ export function RescuePage() {
                 )}
 
                 {/* Google Calendar Context and Execution Actions */}
-                <div className="border-t border-[#28251d]/8 pt-4 space-y-3.5">
+                <div className="border-t border-[#28251d]/8 pt-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-4 h-4 text-[#7a7974]" />
-                      <span className="text-xs font-serif font-bold text-[#28251d]">Google Calendar Integration</span>
+                      <Calendar className="w-4 h-4 text-[#01696f]" />
+                      <span className="text-xs font-mono font-bold uppercase tracking-wider text-[#28251d]">AI Focus Block Planner</span>
                     </div>
                     <span className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded-sm border ${
                       calendarConnected 
                         ? "text-[#01696f] bg-[#01696f]/5 border-[#01696f]/20" 
                         : "text-[#7a7974] bg-[#f4f2ea]/60 border-[#28251d]/10"
                     }`}>
-                      {calendarConnected ? "Connected" : "Inactive"}
+                      {calendarConnected ? "Google Calendar Connected" : "Local Planner Mode (Offline)"}
                     </span>
                   </div>
 
@@ -1045,52 +1208,54 @@ export function RescuePage() {
                     </div>
                   )}
 
-                  {!calendarConnected ? (
-                    <div className="space-y-3 p-3.5 bg-white border border-[#28251d]/10 rounded-sm">
-                      <p className="text-[12px] text-[#7a7974] leading-relaxed">
-                        Analyze actual calendar availability before your deadline and reserve structured focus slots instantly.
+                  {!calendarConnected && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-sm space-y-2 text-xs text-amber-900">
+                      <p className="leading-relaxed text-[11px]">
+                        Google Calendar is not authorized. You can authorize it now to push focus blocks directly to your primary schedule, or continue in offline mode.
                       </p>
                       <button
                         type="button"
                         disabled={connectingCalendar}
                         onClick={handleConnectCalendarInline}
-                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-[11px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer border-none"
                       >
                         {connectingCalendar ? (
                           <>
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>Connecting...</span>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            <span>Authorizing...</span>
                           </>
                         ) : (
                           <span>Connect Google Calendar</span>
                         )}
                       </button>
                     </div>
-                  ) : (
-                    <div className="space-y-3.5">
+                  )}
+
+                  {calendarConnected && (
+                    <div className="space-y-2.5">
                       {checkingCalendar ? (
-                        <div className="p-4 text-center border border-[#28251d]/10 bg-white rounded-sm space-y-2">
+                        <div className="p-3 text-center border border-[#28251d]/10 bg-white rounded-sm space-y-2">
                           <RefreshCw className="w-4 h-4 text-[#01696f] animate-spin mx-auto" />
-                          <p className="text-[11px] font-mono text-[#7a7974]">Scanning calendar availability metrics...</p>
+                          <p className="text-[10px] font-mono text-[#7a7974]">Scanning calendar availability metrics...</p>
                         </div>
                       ) : conflictReport ? (
                         <div className="space-y-2.5">
                           {/* Live stats visualization */}
-                          <div className="grid grid-cols-3 gap-2.5 text-center text-xs">
+                          <div className="grid grid-cols-3 gap-2 text-center text-xs">
                             <div className="p-2 bg-white border border-[#28251d]/10 rounded-sm">
-                              <span className="text-[10px] text-[#7a7974] block">Buffer Time</span>
+                              <span className="text-[9px] text-[#7a7974] block">Buffer Time</span>
                               <span className="font-semibold text-[#28251d]">
                                 {(conflictReport.totalTimeMinutes / 60).toFixed(1)}h
                               </span>
                             </div>
                             <div className="p-2 bg-white border border-[#28251d]/10 rounded-sm">
-                              <span className="text-[10px] text-[#7a7974] block">Busy Blocks</span>
+                              <span className="text-[9px] text-[#7a7974] block">Busy Blocks</span>
                               <span className="font-semibold text-amber-700">
                                 {((conflictReport.totalTimeMinutes - conflictReport.availableTimeMinutes) / 60).toFixed(1)}h
                               </span>
                             </div>
                             <div className="p-2 bg-[#01696f]/5 border border-[#01696f]/15 rounded-sm">
-                              <span className="text-[10px] text-[#01696f] block">Net Free</span>
+                              <span className="text-[9px] text-[#01696f] block">Net Free</span>
                               <span className="font-bold text-[#01696f]">
                                 {(conflictReport.availableTimeMinutes / 60).toFixed(1)}h
                               </span>
@@ -1099,57 +1264,178 @@ export function RescuePage() {
 
                           {/* Analysis and warning logic */}
                           {conflictReport.availableTimeMinutes < selectedTask.estimatedMinutes ? (
-                            <div className="p-3 bg-rose-50 border border-rose-200 rounded-sm text-xs text-rose-800 space-y-1">
-                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
-                                <AlertTriangle className="w-4 h-4 text-rose-600" /> Availability Squeezed
+                            <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-sm text-xs text-rose-800 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[9px]">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600" /> Availability Squeezed
                               </div>
-                              <p className="leading-relaxed">
-                                You only have <strong>{(conflictReport.availableTimeMinutes / 60).toFixed(1)} hours</strong> of free time, but this task requires <strong>{(selectedTask.estimatedMinutes / 60).toFixed(1)} hours</strong>. Workload exceeds availability. Activate a <strong>Plan Compression</strong> immediately!
+                              <p className="leading-relaxed text-[11px]">
+                                You only have <strong>{(conflictReport.availableTimeMinutes / 60).toFixed(1)} hours</strong> of free time, but this task requires <strong>{(selectedTask.estimatedMinutes / 60).toFixed(1)} hours</strong>.
                               </p>
                             </div>
                           ) : conflictReport.hasConflict ? (
-                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-sm text-xs text-amber-900 space-y-1">
-                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
-                                <AlertTriangle className="w-4 h-4 text-amber-600" /> Active Commitments Overlap
+                            <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-sm text-xs text-amber-900 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[9px]">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Active Commitments Overlap
                               </div>
-                              <p className="leading-relaxed">
-                                We detected <strong>{conflictReport.conflictingSlots.length}</strong> calendar commitments before your deadline. Total conflict duration: {((conflictReport.totalTimeMinutes - conflictReport.availableTimeMinutes) / 60).toFixed(1)}h.
+                              <p className="leading-relaxed text-[11px]">
+                                We detected <strong>{conflictReport.conflictingSlots.length}</strong> calendar commitments before your deadline.
                               </p>
                             </div>
                           ) : (
-                            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-sm text-xs text-emerald-950 space-y-1">
-                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[10px]">
-                                <ShieldCheck className="w-4 h-4 text-emerald-600" /> Calendar Clear
+                            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-sm text-xs text-emerald-950 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[9px]">
+                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Calendar Clear
                               </div>
-                              <p className="leading-relaxed">
-                                No scheduling commitments are present before your deadline. Net free time is highly sufficient for delivery.
+                              <p className="leading-relaxed text-[11px]">
+                                No scheduling commitments are present before your deadline.
                               </p>
                             </div>
                           )}
-
-                          {/* Scheduling trigger */}
-                          <button
-                            type="button"
-                            disabled={schedulingBlock}
-                            onClick={handleScheduleRescueBlock}
-                            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                          >
-                            {schedulingBlock ? (
-                              <>
-                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                <span>Scheduling Block...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Clock className="w-3.5 h-3.5" />
-                                <span>Schedule 90-Min Rescue Block</span>
-                              </>
-                            )}
-                          </button>
                         </div>
-                      ) : (
-                        <p className="text-xs text-[#7a7974] italic">Could not load schedule availability.</p>
-                      )}
+                      ) : null}
+                    </div>
+                  )}
+
+                  {/* RENDERING OPTION 1: EXISTING SCHEDULED BLOCKS */}
+                  {selectedTask.scheduledBlocks && selectedTask.scheduledBlocks.length > 0 ? (
+                    <div className="space-y-3.5 bg-white p-3.5 border border-[#28251d]/10 rounded-sm">
+                      <div className="flex items-center justify-between border-b border-[#28251d]/8 pb-2">
+                        <span className="text-[10px] font-mono font-bold uppercase text-[#01696f] tracking-widest flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Scheduled Blocks ({selectedTask.scheduledBlocks.length})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleClearSchedule}
+                          disabled={approvingSchedule}
+                          className="text-[9px] font-mono text-rose-700 hover:text-rose-900 border-none bg-transparent hover:underline cursor-pointer"
+                        >
+                          Reschedule
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                        {selectedTask.scheduledBlocks.map((block, index) => {
+                          const start = new Date(block.startTime);
+                          const end = new Date(block.endTime);
+                          return (
+                            <div key={block.blockId || index} className="p-3 bg-[#f9f8f5] border border-[#28251d]/10 rounded-sm space-y-1.5 text-left">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-[#28251d]">{block.title}</span>
+                                <span className="text-[9px] font-mono bg-[#01696f]/10 text-[#01696f] px-1.5 py-0.5 rounded-sm">
+                                  {block.durationMinutes}m
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-[#7a7974] flex items-center justify-between">
+                                <span className="font-bold text-[#01696f]">
+                                  {start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                                </span>
+                                <span>
+                                  {start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-[#55534e] bg-white p-2 border border-black/5 rounded-sm italic leading-relaxed">
+                                {block.explanation}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : suggestedBlocks ? (
+                    /* RENDERING OPTION 2: PREVIEW GENERATED SUGGESTIONS */
+                    <div className="space-y-3.5 bg-white p-3.5 border border-[#28251d]/10 rounded-sm">
+                      <div className="flex items-center justify-between border-b border-[#28251d]/8 pb-2">
+                        <span className="text-[10px] font-mono font-bold uppercase text-amber-800 tracking-widest flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600 animate-pulse" /> SUGGESTED BLOCKS ({suggestedBlocks.length})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSuggestedBlocks(null)}
+                          className="text-[9px] font-mono text-neutral-500 hover:text-neutral-800 border-none bg-transparent hover:underline cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                        {suggestedBlocks.map((block, index) => {
+                          const start = new Date(block.startTime);
+                          const end = new Date(block.endTime);
+                          return (
+                            <div key={block.blockId || index} className="p-3 bg-amber-50/40 border border-amber-200/50 rounded-sm space-y-1.5 text-left">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-[#28251d]">{block.title}</span>
+                                <span className="text-[9px] font-mono bg-amber-700/10 text-amber-800 px-1.5 py-0.5 rounded-sm">
+                                  {block.durationMinutes}m
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-[#7a7974] flex items-center justify-between">
+                                <span className="font-bold text-[#01696f]">
+                                  {start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                                </span>
+                                <span>
+                                  {start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-[#55534e] bg-white/80 p-2 border border-black/5 rounded-sm italic leading-relaxed">
+                                {block.explanation}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={approvingSchedule}
+                        onClick={handleApproveAndSaveSchedule}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-[#01696f] hover:bg-[#005156] disabled:opacity-50 text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer border-none"
+                      >
+                        {approvingSchedule ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Booking Focus Blocks...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{calendarConnected ? "Confirm & Book on Google Calendar" : "Save Suggested Focus Plan"}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    /* RENDERING OPTION 3: NO SCHEDULE YET. SUGGEST BUTTONS */
+                    <div className="space-y-2.5">
+                      <div className="grid grid-cols-1 gap-2">
+                        <button
+                          type="button"
+                          onClick={handleGenerateSuggestedSchedule}
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 bg-[#28251d] hover:bg-[#01696f] text-white rounded-sm text-xs font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer border-none"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>AI Focus-Block Suggester (Full Effort)</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          disabled={schedulingBlock}
+                          onClick={handleScheduleRescueBlock}
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-[#28251d]/15 hover:border-[#28251d]/40 bg-transparent text-[#28251d] rounded-sm text-[11px] font-mono font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                        >
+                          {schedulingBlock ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Calculating...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3 text-amber-600" />
+                              <span>Schedule Single 90-Min Rescue Block</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
