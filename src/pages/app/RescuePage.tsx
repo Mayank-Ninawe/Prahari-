@@ -209,10 +209,21 @@ export function RescuePage() {
       setTimeout(() => setCalendarMessage(null), 5000);
     } catch (err: any) {
       console.error(err);
-      setCalendarMessage({
-        type: "error",
-        text: err.message || "Failed to authorize Google Calendar."
-      });
+      const isPopupBlocked = err?.code === "auth/popup-blocked" || 
+                             (err?.message && (err.message.includes("popup-blocked") || err.message.includes("popup blocked"))) || 
+                             String(err).includes("popup-blocked");
+                             
+      if (isPopupBlocked) {
+        setCalendarMessage({
+          type: "error",
+          text: "Pop-up Blocked: Your browser blocked the authorization window because this app is embedded inside an iframe. Please click the 'Open in New Tab' icon at the top right of this screen to open the app in a new tab, then try connecting again."
+        });
+      } else {
+        setCalendarMessage({
+          type: "error",
+          text: err.message || "Failed to authorize Google Calendar."
+        });
+      }
     } finally {
       setConnectingCalendar(false);
     }
@@ -536,12 +547,21 @@ export function RescuePage() {
       const planDoc: Partial<RescuePlanDocument> = {
         planTitle: newPlan.planTitle,
         planSummary: newPlan.planSummary,
+        planningMode: newPlan.planningMode,
+        phases: newPlan.phases,
         steps: newPlan.steps,
+        dependencies: newPlan.dependencies,
+        blockers: newPlan.blockers,
+        firstAction: newPlan.firstAction,
+        nextRecommendedStepId: newPlan.nextRecommendedStepId,
+        minimumViablePath: newPlan.minimumViablePath,
+        optionalPolishPath: newPlan.optionalPolishPath,
         totalEstimatedMinutes: newPlan.totalEstimatedMinutes,
         firstActionLabel: newPlan.firstActionLabel,
         compressionMode: "not_needed",
         survivalGoal: newPlan.survivalGoal,
         droppedOrDeferred: newPlan.droppedOrDeferred,
+        confidence: newPlan.confidence,
       };
 
       const planId = await FirebaseService.saveRescuePlan(
@@ -599,13 +619,7 @@ export function RescuePage() {
           deadline: deadlineStr,
           estimatedMinutes: selectedTask.estimatedMinutes,
         },
-        {
-          planTitle: activePlan.planTitle,
-          planSummary: activePlan.planSummary,
-          steps: activePlan.steps,
-          totalEstimatedMinutes: activePlan.totalEstimatedMinutes,
-          firstActionLabel: activePlan.firstActionLabel,
-        },
+        activePlan as any,
         `Compression is requested to ${mode} mode due to tight remaining time.`,
         {
           workStyle: userDoc?.workStyle || "normal",
@@ -1689,6 +1703,36 @@ export function RescuePage() {
                         “{activePlan.planSummary}”
                       </p>
 
+                      {activePlan.confidence && (
+                        <div className="flex items-center justify-between bg-[#f3f0ec] px-4 py-2 border border-[#28251d]/8 rounded-sm text-xs">
+                          <span className="text-[#7a7974] font-medium">Strategic Execution Confidence Rate:</span>
+                          <span className="font-mono font-bold text-[#01696f] bg-[#01696f]/5 border border-[#01696f]/20 px-2 py-0.5 rounded-sm">
+                            {activePlan.confidence}% CONFIDENT
+                          </span>
+                        </div>
+                      )}
+
+                      {activePlan.firstAction && (
+                        <div className="p-4 border border-[#01696f]/25 bg-[#01696f]/5 rounded-sm space-y-2 text-left">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-[#01696f] uppercase tracking-wide">
+                            <Zap className="w-3.5 h-3.5 text-[#01696f] animate-bounce" />
+                            AI Launch Directive (Recommended Start)
+                          </div>
+                          <div className="space-y-1">
+                            <h6 className="text-sm font-semibold text-[#28251d]">
+                              {activePlan.firstAction.title}
+                            </h6>
+                            <p className="text-xs text-[#7a7974] leading-normal">
+                              {activePlan.firstAction.description}
+                            </p>
+                            <div className="text-[11px] text-[#01696f] bg-white p-2.5 rounded-sm border border-[#01696f]/15 mt-1">
+                              <strong className="uppercase font-mono text-[9px] block mb-0.5 tracking-wider">Plan Reasoning:</strong>
+                              <span className="italic leading-normal">{activePlan.firstAction.reason}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {activePlan.survivalGoal && (
                         <div className="p-4 bg-amber-500/5 border border-amber-500/15 rounded-sm space-y-2 text-left">
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800">
@@ -1713,80 +1757,241 @@ export function RescuePage() {
                         </div>
                       )}
 
-                      <div className="space-y-3.5">
-                        {displaySteps.map((step, idx) => {
-                          const isDone = completedSteps[step.stepId];
-                          return (
-                            <div
-                              key={step.stepId}
-                              className={`p-4 border rounded-sm flex items-start gap-3.5 transition-all duration-200 ${
-                                isDone
-                                  ? "bg-[#f3f0ec] border-[#28251d]/8 opacity-60"
-                                  : "bg-white border-[#28251d]/10 hover:border-[#28251d]/25"
-                              }`}
-                            >
-                              <button onClick={() => toggleStepCompleted(step.stepId)} className="mt-1 cursor-pointer shrink-0">
-                                <div
-                                  className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-all ${
-                                    isDone
-                                      ? "bg-[#28251d] border-[#28251d] text-white"
-                                      : "border-[#28251d]/25 bg-white hover:border-[#28251d]"
-                                  }`}
-                                >
-                                  {isDone && <Check className="w-3.5 h-3.5" />}
+                      {/* Phased Step Grouping or Flat Fallback Checklist */}
+                      {activePlan.phases && activePlan.phases.length > 0 ? (
+                        <div className="space-y-5">
+                          {activePlan.phases.map((phase, phaseIdx) => {
+                            const phaseSteps = displaySteps.filter(
+                              (s) => s.phaseId === phase.phaseId || phase.stepIds.includes(s.stepId)
+                            );
+                            if (phaseSteps.length === 0) return null;
+
+                            return (
+                              <div key={phase.phaseId} className="border border-[#28251d]/10 rounded-sm overflow-hidden bg-white">
+                                <div className="bg-[#f3f0ec] px-4 py-3 border-b border-[#28251d]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-left">
+                                  <div>
+                                    <span className="text-[9px] font-mono font-bold uppercase text-[#7a7974] tracking-wider">
+                                      PHASE {phaseIdx + 1}
+                                    </span>
+                                    <h5 className="text-sm font-bold text-[#28251d] mt-0.5">{phase.title}</h5>
+                                    <p className="text-xs text-[#7a7974] mt-0.5 leading-normal">{phase.description}</p>
+                                  </div>
+                                  <div className="shrink-0 bg-white/90 border border-[#28251d]/8 px-2 py-1 rounded-sm font-mono text-[10px] text-[#28251d] font-semibold">
+                                    {phase.estimatedMinutes} mins
+                                  </div>
                                 </div>
-                              </button>
+                                <div className="divide-y divide-[#28251d]/6 p-4 bg-[#f9f8f5]/50 space-y-3">
+                                  {phaseSteps.map((step, idx) => {
+                                    const isDone = completedSteps[step.stepId];
+                                    const stepDep = activePlan.dependencies?.find((d) => d.stepId === step.stepId);
+                                    const hasUnresolvedDeps = stepDep?.dependsOnIds.some((depId) => !completedSteps[depId]);
 
-                              <div className="flex-1 min-w-0 text-left space-y-1">
-                                <div className="flex flex-wrap items-baseline gap-2">
-                                  <span className="text-[11px] text-[#7a7974] font-medium">
-                                    Step {idx + 1}
-                                  </span>
-                                  <h5
-                                    className={`text-sm font-semibold leading-tight ${
-                                      isDone ? "text-[#7a7974] line-through" : "text-[#28251d]"
-                                    }`}
-                                  >
-                                    {step.title}
-                                  </h5>
-                                  <Badge
-                                    urgency={
-                                      step.urgencyTag === "now"
-                                        ? "critical"
-                                        : step.urgencyTag === "soon"
-                                        ? "medium"
-                                        : "low"
-                                    }
-                                  >
-                                    {step.urgencyTag}
-                                  </Badge>
-                                </div>
+                                    return (
+                                      <div
+                                        key={step.stepId}
+                                        className={`p-4 border rounded-sm flex items-start gap-3.5 transition-all duration-200 ${
+                                          isDone
+                                            ? "bg-[#f3f0ec]/40 border-[#28251d]/6 opacity-60"
+                                            : hasUnresolvedDeps
+                                            ? "bg-[#f4f2ea] border-amber-200/60"
+                                            : "bg-white border-[#28251d]/10 hover:border-[#28251d]/25"
+                                        }`}
+                                      >
+                                        <button onClick={() => toggleStepCompleted(step.stepId)} className="mt-1 cursor-pointer shrink-0">
+                                          <div
+                                            className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-all ${
+                                              isDone
+                                                ? "bg-[#28251d] border-[#28251d] text-white"
+                                                : "border-[#28251d]/25 bg-white hover:border-[#28251d]"
+                                            }`}
+                                          >
+                                            {isDone && <Check className="w-3.5 h-3.5" />}
+                                          </div>
+                                        </button>
 
-                                <p className="text-sm text-[#7a7974] leading-relaxed">
-                                  {step.description}
-                                </p>
+                                        <div className="flex-1 min-w-0 text-left space-y-1">
+                                          <div className="flex flex-wrap items-baseline gap-2">
+                                            <span className="text-[11px] text-[#7a7974] font-medium">
+                                              Step {idx + 1}
+                                            </span>
+                                            <h5
+                                              className={`text-sm font-semibold leading-tight ${
+                                                isDone ? "text-[#7a7974] line-through" : "text-[#28251d]"
+                                              }`}
+                                            >
+                                              {step.title}
+                                            </h5>
+                                            <Badge
+                                              urgency={
+                                                step.urgencyTag === "now"
+                                                  ? "critical"
+                                                  : step.urgencyTag === "soon"
+                                                  ? "medium"
+                                                  : "low"
+                                              }
+                                            >
+                                              {step.urgencyTag}
+                                            </Badge>
+                                            {step.isEssential === false && (
+                                              <span className="text-[9px] font-mono font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-sm">
+                                                Polish Only
+                                              </span>
+                                            )}
+                                          </div>
 
-                                <div className="pt-2 flex items-center justify-between text-[11px]">
-                                  <span className="text-[#7a7974]">
-                                    {step.estimatedMinutes} mins · {step.completionType}
-                                  </span>
-                                  {!isDone && (
-                                    <button
-                                      onClick={() =>
-                                        handleStartFocusOnStep(step.title, step.estimatedMinutes)
-                                      }
-                                      className="px-2 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 hover:border-amber-300 text-amber-800 rounded-sm font-medium transition-colors cursor-pointer flex items-center gap-1"
-                                    >
-                                      <Play className="w-3 h-3 fill-amber-800" />
-                                      Start focus
-                                    </button>
-                                  )}
+                                          <p className="text-sm text-[#7a7974] leading-relaxed">
+                                            {step.description}
+                                          </p>
+
+                                          {stepDep && stepDep.dependsOnIds.length > 0 && (
+                                            <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+                                              <span className="text-[10px] font-semibold text-amber-800">Requires step completion:</span>
+                                              {stepDep.dependsOnIds.map((depId) => {
+                                                const depStep = displaySteps.find((s) => s.stepId === depId);
+                                                const depDone = completedSteps[depId];
+                                                return (
+                                                  <span
+                                                    key={depId}
+                                                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded-sm border ${
+                                                      depDone
+                                                        ? "bg-emerald-50 border-emerald-200 text-emerald-800 line-through"
+                                                        : "bg-amber-50 border-amber-200 text-amber-800"
+                                                    }`}
+                                                  >
+                                                    {depStep ? depStep.title : "Prerequisite"}
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+
+                                          <div className="pt-2.5 flex items-center justify-between text-[11px]">
+                                            <span className="text-[#7a7974]">
+                                              {step.estimatedMinutes} mins · {step.completionType}
+                                            </span>
+                                            {!isDone && (
+                                              <button
+                                                onClick={() =>
+                                                  handleStartFocusOnStep(step.title, step.estimatedMinutes)
+                                                }
+                                                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 hover:border-amber-300 text-amber-800 rounded-sm font-medium transition-colors cursor-pointer flex items-center gap-1"
+                                              >
+                                                <Play className="w-3 h-3 fill-amber-800" />
+                                                Start focus
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="space-y-3.5">
+                          {displaySteps.map((step, idx) => {
+                            const isDone = completedSteps[step.stepId];
+                            return (
+                              <div
+                                key={step.stepId}
+                                className={`p-4 border rounded-sm flex items-start gap-3.5 transition-all duration-200 ${
+                                  isDone
+                                    ? "bg-[#f3f0ec] border-[#28251d]/8 opacity-60"
+                                    : "bg-white border-[#28251d]/10 hover:border-[#28251d]/25"
+                                }`}
+                              >
+                                <button onClick={() => toggleStepCompleted(step.stepId)} className="mt-1 cursor-pointer shrink-0">
+                                  <div
+                                    className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-all ${
+                                      isDone
+                                        ? "bg-[#28251d] border-[#28251d] text-white"
+                                        : "border-[#28251d]/25 bg-white hover:border-[#28251d]"
+                                    }`}
+                                  >
+                                    {isDone && <Check className="w-3.5 h-3.5" />}
+                                  </div>
+                                </button>
+
+                                <div className="flex-1 min-w-0 text-left space-y-1">
+                                  <div className="flex flex-wrap items-baseline gap-2">
+                                    <span className="text-[11px] text-[#7a7974] font-medium">
+                                      Step {idx + 1}
+                                    </span>
+                                    <h5
+                                      className={`text-sm font-semibold leading-tight ${
+                                        isDone ? "text-[#7a7974] line-through" : "text-[#28251d]"
+                                      }`}
+                                    >
+                                      {step.title}
+                                    </h5>
+                                    <Badge
+                                      urgency={
+                                        step.urgencyTag === "now"
+                                          ? "critical"
+                                          : step.urgencyTag === "soon"
+                                          ? "medium"
+                                          : "low"
+                                      }
+                                    >
+                                      {step.urgencyTag}
+                                    </Badge>
+                                  </div>
+
+                                  <p className="text-sm text-[#7a7974] leading-relaxed">
+                                    {step.description}
+                                  </p>
+
+                                  <div className="pt-2 flex items-center justify-between text-[11px]">
+                                    <span className="text-[#7a7974]">
+                                      {step.estimatedMinutes} mins · {step.completionType}
+                                    </span>
+                                    {!isDone && (
+                                      <button
+                                        onClick={() =>
+                                          handleStartFocusOnStep(step.title, step.estimatedMinutes)
+                                        }
+                                        className="px-2 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 hover:border-amber-300 text-amber-800 rounded-sm font-medium transition-colors cursor-pointer flex items-center gap-1"
+                                      >
+                                        <Play className="w-3 h-3 fill-amber-800" />
+                                        Start focus
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Blockers & Mitigation Radar Section */}
+                      {activePlan.blockers && activePlan.blockers.length > 0 && (
+                        <div className="border border-[#28251d]/10 bg-white rounded-sm p-4 text-left space-y-3 mt-4">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-rose-800 uppercase tracking-wide">
+                            <ShieldAlert className="w-3.5 h-3.5 text-rose-600 animate-pulse" />
+                            Predicted Strategic Blockers & Mitigation Commands
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            {activePlan.blockers.map((blocker) => (
+                              <div key={blocker.blockerId} className="p-3 bg-rose-50/20 border border-rose-100 rounded-sm space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-rose-800 bg-rose-100/50 border border-rose-200 px-1.5 py-0.5 rounded-sm">
+                                    {blocker.type}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-[#28251d] font-semibold leading-relaxed">{blocker.description}</p>
+                                <div className="text-[11px] text-emerald-900 bg-emerald-50/50 border border-emerald-100 p-2.5 rounded-sm leading-normal">
+                                  <strong className="uppercase font-mono text-[9px] block mb-0.5 text-emerald-800">Mitigation:</strong>
+                                  {blocker.resolutionAction}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </Card>
                   )}
 

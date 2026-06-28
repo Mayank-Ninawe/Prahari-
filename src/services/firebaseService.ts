@@ -76,6 +76,14 @@ export interface RescuePlanDocument {
   planId: string;
   planTitle: string;
   planSummary: string;
+  planningMode?: "autonomous" | "rescue" | "maintain";
+  phases?: {
+    phaseId: string;
+    title: string;
+    description: string;
+    estimatedMinutes: number;
+    stepIds: string[];
+  }[];
   steps: {
     stepId: string;
     title: string;
@@ -83,7 +91,29 @@ export interface RescuePlanDocument {
     estimatedMinutes: number;
     urgencyTag: "now" | "soon" | "later";
     completionType: "manual" | "review" | "submit";
+    isEssential?: boolean;
+    phaseId?: string;
   }[];
+  dependencies?: {
+    stepId: string;
+    dependsOnIds: string[];
+  }[];
+  blockers?: {
+    blockerId: string;
+    description: string;
+    type: "technical" | "resource" | "external";
+    resolutionAction: string;
+    affectStepIds: string[];
+  }[];
+  firstAction?: {
+    stepId: string;
+    title: string;
+    description: string;
+    reason: string;
+  };
+  nextRecommendedStepId?: string;
+  minimumViablePath?: string[];
+  optionalPolishPath?: string[];
   totalEstimatedMinutes: number;
   firstActionLabel: string;
   compressionMode: "not_needed" | "light" | "hard";
@@ -94,11 +124,14 @@ export interface RescuePlanDocument {
     estimatedMinutes: number;
     urgencyTag: "now" | "soon" | "later";
     completionType: "manual" | "review" | "submit";
+    isEssential?: boolean;
+    phaseId?: string;
   }[];
   droppedOrDeferred?: string[];
   survivalGoal?: string;
   completedStepIds?: string[];
   progressPercentage?: number;
+  confidence?: number;
   createdAt: any;
   updatedAt: any;
   source: string;
@@ -505,7 +538,15 @@ export const FirebaseService = {
       planId,
       planTitle: plan.planTitle || "Rescue Plan",
       planSummary: plan.planSummary || "",
+      planningMode: plan.planningMode,
+      phases: plan.phases,
       steps: plan.steps || [],
+      dependencies: plan.dependencies,
+      blockers: plan.blockers,
+      firstAction: plan.firstAction,
+      nextRecommendedStepId: plan.nextRecommendedStepId,
+      minimumViablePath: plan.minimumViablePath,
+      optionalPolishPath: plan.optionalPolishPath,
       totalEstimatedMinutes: plan.totalEstimatedMinutes || 0,
       firstActionLabel: plan.firstActionLabel || "First Action",
       compressionMode: plan.compressionMode || "not_needed",
@@ -514,6 +555,7 @@ export const FirebaseService = {
       survivalGoal: plan.survivalGoal,
       completedStepIds: plan.completedStepIds,
       progressPercentage: plan.progressPercentage,
+      confidence: plan.confidence,
       createdAt: plan.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       source: plan.source || "gemini",

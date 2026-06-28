@@ -81,7 +81,15 @@ export function ProfilePage() {
       await loadBusySlots();
     } catch (err: any) {
       console.error("Failed to connect Google Calendar:", err);
-      setError(err.message || "Authorization popup was blocked or denied.");
+      const isPopupBlocked = err?.code === "auth/popup-blocked" || 
+                             (err?.message && (err.message.includes("popup-blocked") || err.message.includes("popup blocked"))) || 
+                             String(err).includes("popup-blocked");
+                             
+      if (isPopupBlocked) {
+        setError("Pop-up Blocked: Your browser blocked the Google authorization window because the app is running inside a secure preview frame. To authorize successfully, please open the application in its own tab by clicking the 'Open in New Tab' icon at the top-right of this screen, then try connecting again.");
+      } else {
+        setError(err.message || "Authorization popup was blocked or denied.");
+      }
     } finally {
       setConnectingCalendar(false);
     }

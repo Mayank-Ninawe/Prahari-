@@ -135,7 +135,16 @@ export function AuthPage() {
       await loginWithGoogle();
       navigate(from, { replace: true });
     } catch (err: any) {
-      setError(err?.message || "Google authentication failed.");
+      console.error("Google login failed:", err);
+      const isPopupBlocked = err?.code === "auth/popup-blocked" || 
+                             (err?.message && (err.message.includes("popup-blocked") || err.message.includes("popup blocked"))) || 
+                             String(err).includes("popup-blocked");
+                             
+      if (isPopupBlocked) {
+        setError("Pop-up Blocked: Your browser blocked the Google authentication window because the application is embedded in a secure preview frame. To log in via Google successfully, please open the application in its own tab by clicking the 'Open in New Tab' icon at the top-right of this screen, or sign in using your workspace email and password instead.");
+      } else {
+        setError(err?.message || "Google authentication failed.");
+      }
     } finally {
       setIsLoading(false);
     }

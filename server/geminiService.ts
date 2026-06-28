@@ -36,26 +36,32 @@ export async function generateContentWithRetry(
     } catch (err: any) {
       attempt++;
       const errMsg = err?.message || String(err);
-      const isUnavailable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || err?.status === 503;
       console.warn(`[Gemini SDK] Attempt ${attempt} failed:`, errMsg);
       
-      if (attempt >= maxRetries) {
+      const isQuotaExceeded = errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.toLowerCase().includes("quota") || err?.status === 429;
+      const isUnavailable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || err?.status === 503;
+      
+      // If daily quota is exceeded, retry is futile. Fallback immediately. If unavailable, try once then fallback.
+      const shouldFallbackNow = isQuotaExceeded || (isUnavailable && attempt >= 1) || attempt >= maxRetries;
+      
+      if (shouldFallbackNow) {
         if (options.model === "gemini-3.5-flash") {
-          console.warn("[Gemini SDK] gemini-3.5-flash failed after retries. Trying fallback model gemini-2.5-flash...");
+          console.warn(`[Gemini SDK] gemini-3.5-flash failed (isQuota: ${isQuotaExceeded}, isUnavailable: ${isUnavailable}). Trying fallback model gemini-flash-latest...`);
           try {
             return await activeClient.models.generateContent({
               ...options,
-              model: "gemini-2.5-flash"
+              model: "gemini-flash-latest"
             });
-          } catch (fallbackErr) {
-            console.error("[Gemini SDK] Fallback model gemini-2.5-flash also failed, trying gemini-1.5-flash...", fallbackErr);
+          } catch (fallbackErr: any) {
+            const fallbackErrMsg = fallbackErr?.message || String(fallbackErr);
+            console.error("[Gemini SDK] Fallback model gemini-flash-latest also failed, trying gemini-3.1-flash-lite...", fallbackErrMsg);
             try {
               return await activeClient.models.generateContent({
                 ...options,
-                model: "gemini-1.5-flash"
+                model: "gemini-3.1-flash-lite"
               });
             } catch (fallbackErr2) {
-              console.error("[Gemini SDK] Fallback model gemini-1.5-flash also failed:", fallbackErr2);
+              console.error("[Gemini SDK] Fallback model gemini-3.1-flash-lite also failed:", fallbackErr2);
               throw err;
             }
           }
@@ -87,6 +93,27 @@ export interface RiskAssessmentOutput {
   recommendedMode: "maintain" | "rescue" | "compress";
 }
 
+export interface PlanningPhase {
+  phaseId: string;
+  title: string;
+  description: string;
+  estimatedMinutes: number;
+  stepIds: string[];
+}
+
+export interface PlanningDependency {
+  stepId: string;
+  dependsOnIds: string[];
+}
+
+export interface PlanningBlocker {
+  blockerId: string;
+  description: string;
+  type: "technical" | "resource" | "external";
+  resolutionAction: string;
+  affectStepIds: string[];
+}
+
 export interface RescueStep {
   stepId: string;
   title: string;
@@ -94,16 +121,33 @@ export interface RescueStep {
   estimatedMinutes: number;
   urgencyTag: "now" | "soon" | "later";
   completionType: "manual" | "review" | "submit";
+  isEssential: boolean;
+  phaseId: string;
 }
 
 export interface RescuePlanOutput {
+  planId: string;
   planTitle: string;
   planSummary: string;
+  planningMode: "autonomous" | "rescue" | "maintain";
+  phases: PlanningPhase[];
   steps: RescueStep[];
+  dependencies: PlanningDependency[];
+  blockers: PlanningBlocker[];
+  firstAction: {
+    stepId: string;
+    title: string;
+    description: string;
+    reason: string;
+  };
+  nextRecommendedStepId: string;
+  minimumViablePath: string[];
+  optionalPolishPath: string[];
   totalEstimatedMinutes: number;
   firstActionLabel: string;
   survivalGoal: string;
   droppedOrDeferred: string[];
+  confidence: number;
 }
 
 export interface PlanCompressionOutput {
@@ -160,6 +204,51 @@ const riskAssessmentSchema = {
   required: ["riskScore", "riskLevel", "riskReasonSummary", "topRiskFactors", "recommendedMode"]
 };
 
+const planningPhaseSchema = {
+  type: Type.OBJECT,
+  properties: {
+    phaseId: { type: Type.STRING, description: "Unique ID for this phase, e.g., 'phase_1'." },
+    title: { type: Type.STRING, description: "Title of the phase, e.g., 'Phase 1: Database Setup'." },
+    description: { type: Type.STRING, description: "Detailed objective of this phase." },
+    estimatedMinutes: { type: Type.INTEGER, description: "Estimated time to complete this phase in minutes." },
+    stepIds: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Array of step IDs that belong to this phase, in sequential order."
+    }
+  },
+  required: ["phaseId", "title", "description", "estimatedMinutes", "stepIds"]
+};
+
+const planningDependencySchema = {
+  type: Type.OBJECT,
+  properties: {
+    stepId: { type: Type.STRING, description: "The step that has prerequisites/dependencies." },
+    dependsOnIds: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Step IDs that MUST be completed before this step can begin."
+    }
+  },
+  required: ["stepId", "dependsOnIds"]
+};
+
+const planningBlockerSchema = {
+  type: Type.OBJECT,
+  properties: {
+    blockerId: { type: Type.STRING, description: "Unique ID for this blocker, e.g., 'blocker_1'." },
+    description: { type: Type.STRING, description: "Description of the potential blocker/critical bottleneck." },
+    type: { type: Type.STRING, description: "Must be 'technical', 'resource', or 'external'." },
+    resolutionAction: { type: Type.STRING, description: "The autonomous operational directive to resolve or bypass this blocker." },
+    affectStepIds: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Step IDs that will be blocked if this blocker triggers."
+    }
+  },
+  required: ["blockerId", "description", "type", "resolutionAction", "affectStepIds"]
+};
+
 const rescueStepSchema = {
   type: Type.OBJECT,
   properties: {
@@ -168,20 +257,60 @@ const rescueStepSchema = {
     description: { type: Type.STRING, description: "Specific technical, administrative, or operational directive. Explain exactly how to verify this step." },
     estimatedMinutes: { type: Type.INTEGER, description: "Estimated time to complete this step in minutes." },
     urgencyTag: { type: Type.STRING, description: "Must be one of: 'now', 'soon', 'later'." },
-    completionType: { type: Type.STRING, description: "Must be one of: 'manual', 'review', 'submit'." }
+    completionType: { type: Type.STRING, description: "Must be one of: 'manual', 'review', 'submit'." },
+    isEssential: { type: Type.BOOLEAN, description: "True if this step is part of the Minimum Viable Path (mandatory work). False if it is optional polish or secondary scope." },
+    phaseId: { type: Type.STRING, description: "The phase ID this step belongs to." }
   },
-  required: ["stepId", "title", "description", "estimatedMinutes", "urgencyTag", "completionType"]
+  required: ["stepId", "title", "description", "estimatedMinutes", "urgencyTag", "completionType", "isEssential", "phaseId"]
 };
 
 const rescuePlanSchema = {
   type: Type.OBJECT,
   properties: {
+    planId: { type: Type.STRING, description: "Unique ID for this plan, e.g., 'plan_main'." },
     planTitle: { type: Type.STRING, description: "Operational rescue plan title, e.g., 'Core Interface Recovery Sequence'." },
     planSummary: { type: Type.STRING, description: "Overview of the recovery strategy focus under current constraints." },
+    planningMode: { type: Type.STRING, description: "Must be 'autonomous'." },
+    phases: {
+      type: Type.ARRAY,
+      items: planningPhaseSchema,
+      description: "List of logical phases grouping the steps."
+    },
     steps: {
       type: Type.ARRAY,
       items: rescueStepSchema,
-      description: "List of actionable steps needed to complete the task successfully."
+      description: "Complete list of actionable steps needed to complete the task successfully, ordered logically."
+    },
+    dependencies: {
+      type: Type.ARRAY,
+      items: planningDependencySchema,
+      description: "Inter-step dependency mappings."
+    },
+    blockers: {
+      type: Type.ARRAY,
+      items: planningBlockerSchema,
+      description: "Identified critical bottlenecks or external constraints."
+    },
+    firstAction: {
+      type: Type.OBJECT,
+      properties: {
+        stepId: { type: Type.STRING, description: "ID of the first actionable step." },
+        title: { type: Type.STRING, description: "Title of the first actionable step." },
+        description: { type: Type.STRING, description: "What needs to be done immediately." },
+        reason: { type: Type.STRING, description: "Strategic justification why this step is first." }
+      },
+      required: ["stepId", "title", "description", "reason"]
+    },
+    nextRecommendedStepId: { type: Type.STRING, description: "ID of the next step recommended after the first action." },
+    minimumViablePath: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Ordered list of step IDs that constitute the Minimum Viable Path (essential steps only)."
+    },
+    optionalPolishPath: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Ordered list of step IDs that represent nice-to-have or optional polish steps."
     },
     totalEstimatedMinutes: { type: Type.INTEGER, description: "Sum of estimatedMinutes of all steps." },
     firstActionLabel: { type: Type.STRING, description: "Concise action call to display on the button, e.g., 'Verify database security schema'." },
@@ -190,9 +319,28 @@ const rescuePlanSchema = {
       type: Type.ARRAY,
       items: { type: Type.STRING },
       description: "Array of nice-to-haves, polish, styles, or secondary features to cut or postpone to achieve the survivalGoal."
-    }
+    },
+    confidence: { type: Type.INTEGER, description: "Strategic confidence score from 0 to 100 of successfully meeting the deadline under this plan." }
   },
-  required: ["planTitle", "planSummary", "steps", "totalEstimatedMinutes", "firstActionLabel", "survivalGoal", "droppedOrDeferred"]
+  required: [
+    "planId",
+    "planTitle",
+    "planSummary",
+    "planningMode",
+    "phases",
+    "steps",
+    "dependencies",
+    "blockers",
+    "firstAction",
+    "nextRecommendedStepId",
+    "minimumViablePath",
+    "optionalPolishPath",
+    "totalEstimatedMinutes",
+    "firstActionLabel",
+    "survivalGoal",
+    "droppedOrDeferred",
+    "confidence"
+  ]
 };
 
 const planCompressionSchema = {
@@ -371,7 +519,7 @@ export const GeminiService = {
     try {
       const deadlineStr = task.deadline instanceof Date ? task.deadline.toISOString() : String(task.deadline);
       const prompt = `
-        You are a ruthless, world-class execution planner and recovery system designer. Your only goal is to prevent deadline failure by replacing vague planning with high-fidelity, actionable, tactical recovery steps.
+        You are an elite autonomous execution planner and operational rescue system. Your role is to replace weak task planning with a high-fidelity, structured, phased, and dependency-aware operational plan.
 
         Current Timestamp: ${currentTime}
         Task Under Rescue:
@@ -391,25 +539,27 @@ export const GeminiService = {
         - Workspace Speed/Focus Style: "${userContext?.workStyle || "normal"}"
 
         INSTRUCTIONS:
-        1. CRITICAL WINDOW CALCULATION: Analyze remaining available time (Deadline minus Current Timestamp). If available time is less than estimated minutes or risk is critical/watch, immediately enforce scope compression.
-        2. TACTICAL SEQUENCE: Generate 3 to 5 highly concrete, sequenced milestone steps.
-        3. NO FLUFF: Avoid generic text like "Start early", "Stay focused", or "Manage your time". Each step must name a real technical, administrative, or operational activity specific to the task title and description.
-        4. SURVIVAL GOAL (Minimum Viable Outcome): Define a razor-sharp, binary survival goal. What is the absolute bare minimum functional piece that must work to consider this a partial success rather than a total deadline disaster?
-        5. DROPPED OR DEFERRED: List 3 to 4 specific nice-to-haves, secondary styling, documentation, or extra features that must be dropped or deferred to protect the core deadline.
-        6. COMPRESSED AND OPERATIONAL DIRECTIVES:
-           - First Step: Immediate high-impact action to get unblocked.
-           - Urgency Tags: Mark step urgency precisely ('now', 'soon', 'later').
-           - Completion Types: Select operational verification methods ('manual', 'review', 'submit').
+        1. DECOMPOSE INTO PHASES: Break down the task into 2 to 3 logical phases (e.g., 'Phase 1: Setup & Prerequisite Verification', 'Phase 2: Core Logic Implementation', 'Phase 3: Validation & Polish').
+        2. SEQUENCE CONCRETE STEPS: Generate a checklist of 3 to 6 steps. Each step must be associated with a phaseId and specify its title, detailed directive, estimated effort, urgencyTag ('now', 'soon', 'later'), and completionType ('manual', 'review', 'submit'). No generic fluff advice.
+        3. CLASSIFY PATHS (MVP VS POLISH):
+           - Mark each step's 'isEssential' boolean. Essential steps (true) form the Minimum Viable Path (MVP) required for basic safety. Optional or polish steps (false) form the Optional Polish Path.
+           - Populate 'minimumViablePath' with ordered stepIds of essential steps.
+           - Populate 'optionalPolishPath' with ordered stepIds of optional steps.
+        4. DEPENDENCY MAPPING: Map prerequisites. Identify which stepIds depend on which other stepIds to form a strict execution sequence.
+        5. BLOCKER IDENTIFICATION: Predict 1 or 2 critical bottlenecks (technical, resource, or external constraints). For each blocker, write a specific autonomous 'resolutionAction' outlining how the developer can resolve or bypass it immediately.
+        6. DETECT FIRST ACTION: Identify the single most critical, high-leverage step that must be started first. Provide a precise strategic 'reason' explaining why this first action is mathematically and operationally optimal.
+        7. ESTIMATE CONFIDENCE: Calculate an operational 'confidence' score (0 to 100) indicating the probability of successfully meeting the deadline given the remaining buffer time.
+        8. PLANNING MODE: Always output planningMode as "autonomous".
       `;
 
       const response = await generateContentWithRetry(activeClient, {
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
-          systemInstruction: "You are the Operational Rescue Planner for Prahari AI. Your role is to break down failing tasks into highly tactical milestone steps. Give precise descriptions of deliverables, estimated effort, and completion types. Do not use generic productivity tips.",
+          systemInstruction: "You are the Lead Autonomous Task Planner for Prahari AI. Your role is to break down failing or complex tasks into a highly structured, phased, and dependency-mapped recovery sequence. Formulate a precise, structured JSON response according to the schema.",
           responseMimeType: "application/json",
           responseSchema: rescuePlanSchema,
-          temperature: 0.3,
+          temperature: 0.25,
         },
       });
 
@@ -591,35 +741,85 @@ export const GeminiService = {
 
   getFallbackRescuePlan(task: { title: string; category: string; estimatedMinutes: number }): RescuePlanOutput {
     const partTime = Math.ceil(task.estimatedMinutes / 3);
+    const step1Id = "step_1";
+    const step2Id = "step_2";
+    const step3Id = "step_3";
+
     return {
+      planId: "fallback_plan_" + Math.random().toString(36).substring(2, 9),
       planTitle: `Tactical Delivery Plan: ${task.title}`,
       planSummary: "Focused step-by-step path isolating key functional requirements for immediate deployment.",
+      planningMode: "autonomous",
+      phases: [
+        {
+          phaseId: "phase_1",
+          title: "Phase 1: Setup & Core Isolation",
+          description: "Deconstruct requirements, isolate core features, and clear potential blockers.",
+          estimatedMinutes: Math.ceil(partTime * 0.8),
+          stepIds: [step1Id]
+        },
+        {
+          phaseId: "phase_2",
+          title: "Phase 2: Functional Core Construction",
+          description: "Build the main interactive layouts and core services under high velocity.",
+          estimatedMinutes: partTime,
+          stepIds: [step2Id, step3Id]
+        }
+      ],
       steps: [
         {
-          stepId: "step_1",
+          stepId: step1Id,
           title: "Isolate Core Deliverables",
           description: `Analyze requirements for ${task.title}. Eliminate any non-essential telemetry or logging parameters.`,
           estimatedMinutes: Math.ceil(partTime * 0.8),
           urgencyTag: "now",
-          completionType: "manual"
+          completionType: "manual",
+          isEssential: true,
+          phaseId: "phase_1"
         },
         {
-          stepId: "step_2",
+          stepId: step2Id,
           title: `Build ${task.category} Interface`,
           description: "Implement direct, secure functional components with local state managers.",
           estimatedMinutes: partTime,
           urgencyTag: "soon",
-          completionType: "review"
+          completionType: "review",
+          isEssential: true,
+          phaseId: "phase_2"
         },
         {
-          stepId: "step_3",
+          stepId: step3Id,
           title: "Verify Firebase Integrations",
           description: "Perform schema validation checks and deploy write transactions under active security rules.",
           estimatedMinutes: Math.ceil(partTime * 1.2),
           urgencyTag: "later",
-          completionType: "submit"
+          completionType: "submit",
+          isEssential: false,
+          phaseId: "phase_2"
         }
       ],
+      dependencies: [
+        { stepId: step2Id, dependsOnIds: [step1Id] },
+        { stepId: step3Id, dependsOnIds: [step2Id] }
+      ],
+      blockers: [
+        {
+          blockerId: "blocker_1",
+          description: "Integration API keys or Firebase connection latency.",
+          type: "technical",
+          resolutionAction: "Engage local storage mocks and standard offline write queues.",
+          affectStepIds: [step3Id]
+        }
+      ],
+      firstAction: {
+        stepId: step1Id,
+        title: "Isolate Core Deliverables",
+        description: `Analyze requirements for ${task.title}. Eliminate any non-essential telemetry or logging parameters.`,
+        reason: "Prerequisite setup must be completed before interface code can be written."
+      },
+      nextRecommendedStepId: step2Id,
+      minimumViablePath: [step1Id, step2Id],
+      optionalPolishPath: [step3Id],
       totalEstimatedMinutes: task.estimatedMinutes,
       firstActionLabel: `Initiate ${task.title} Rescue`,
       survivalGoal: `Deliver a basic working implementation of ${task.title} focusing on core functional flows.`,
@@ -627,7 +827,8 @@ export const GeminiService = {
         "Deferred custom UI styles, animations, and non-essential layout configurations.",
         "Postponed secondary analytics integration, comprehensive unit testing, and redundant backup logging.",
         "Trimmed optional utility scripts and developer instrumentation."
-      ]
+      ],
+      confidence: 85
     };
   },
 

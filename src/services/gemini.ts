@@ -12,6 +12,27 @@ export interface RiskAssessment {
   recommendedMode: "maintain" | "rescue" | "compress";
 }
 
+export interface PlanningPhase {
+  phaseId: string;
+  title: string;
+  description: string;
+  estimatedMinutes: number;
+  stepIds: string[];
+}
+
+export interface PlanningDependency {
+  stepId: string;
+  dependsOnIds: string[];
+}
+
+export interface PlanningBlocker {
+  blockerId: string;
+  description: string;
+  type: "technical" | "resource" | "external";
+  resolutionAction: string;
+  affectStepIds: string[];
+}
+
 export interface RescueStep {
   stepId: string;
   title: string;
@@ -19,16 +40,33 @@ export interface RescueStep {
   estimatedMinutes: number;
   urgencyTag: "now" | "soon" | "later";
   completionType: "manual" | "review" | "submit";
+  isEssential: boolean;
+  phaseId: string;
 }
 
 export interface RescuePlan {
+  planId: string;
   planTitle: string;
   planSummary: string;
+  planningMode: "autonomous" | "rescue" | "maintain";
+  phases: PlanningPhase[];
   steps: RescueStep[];
+  dependencies: PlanningDependency[];
+  blockers: PlanningBlocker[];
+  firstAction: {
+    stepId: string;
+    title: string;
+    description: string;
+    reason: string;
+  };
+  nextRecommendedStepId: string;
+  minimumViablePath: string[];
+  optionalPolishPath: string[];
   totalEstimatedMinutes: number;
   firstActionLabel: string;
   survivalGoal?: string;
   droppedOrDeferred?: string[];
+  confidence?: number;
 }
 
 export interface PlanCompression {
@@ -76,6 +114,19 @@ function getHeaders(): Record<string, string> {
   return headers;
 }
 
+function getTaskFingerprint(task: any): string {
+  if (!task) return "";
+  return `${task.title || ""}_${task.description || ""}_${task.category || ""}_${task.deadline || ""}_${task.priority || ""}_${task.estimatedMinutes || 0}`;
+}
+
+function getTasksFingerprint(tasks: any[]): string {
+  if (!tasks) return "";
+  return tasks
+    .map(t => `${t.taskId}_${t.status}_${t.progressPercentage || 0}_${t.updatedAt ? new Date(t.updatedAt).getTime() : 0}`)
+    .sort()
+    .join("|");
+}
+
 export const GeminiService = {
   /**
    * Assesses deadline risks given a user task payload.
@@ -91,6 +142,24 @@ export const GeminiService = {
     },
     userContext?: { workStyle?: string; aggressiveness?: string; timezone?: string }
   ): Promise<RiskAssessment> {
+    const fingerprint = getTaskFingerprint(task);
+    const cacheKey = `prahari_cache_risk_${fingerprint}`;
+    
+    try {
+      const cachedStr = localStorage.getItem(cacheKey);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        const ageMs = Date.now() - cached.timestamp;
+        // Cache risk assessments for 10 minutes to save quota
+        if (ageMs < 10 * 60 * 1000) {
+          console.log("[Gemini Client Cache] Returning cached risk assessment");
+          return cached.data;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to read risk cache:", e);
+    }
+
     try {
       const response = await fetch("/api/rescue/assess-risk", {
         method: "POST",
@@ -110,20 +179,38 @@ export const GeminiService = {
       if (!result.success) {
         throw new Error(result.error || "Server returned failure");
       }
-      return result.data as RiskAssessment;
+      const risk = result.data as RiskAssessment;
+      
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          timestamp: Date.now(),
+          data: risk
+        }));
+      } catch (e) {}
+      
+      return risk;
     } catch (err) {
       console.error("GeminiService.assessTaskRisk client error, returning client-side fallback:", err);
       // Client-side fallback for offline or errors
       const deadlineMs = new Date(task.deadline).getTime();
       const minutesLeft = Math.max(0, Math.floor((deadlineMs - Date.now()) / (1000 * 60)));
       const score = Math.min(100, Math.max(10, (task.priority === "critical" ? 40 : 20) + (minutesLeft < task.estimatedMinutes ? 50 : 10)));
-      return {
+      const fallback: RiskAssessment = {
         riskScore: score,
         riskLevel: score > 75 ? "critical" : score > 35 ? "watch" : "safe",
         riskReasonSummary: "Calculated task risk (Client Fallback Mode). Time left is tight relative to estimation.",
         topRiskFactors: ["Estimated time workload vs available deadline time", "Priority level weight"],
         recommendedMode: score > 75 ? "compress" : score > 35 ? "rescue" : "maintain",
       };
+      
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          timestamp: Date.now(),
+          data: fallback
+        }));
+      } catch (e) {}
+      
+      return fallback;
     }
   },
 
@@ -165,35 +252,85 @@ export const GeminiService = {
       return result.data as RescuePlan;
     } catch (err) {
       console.error("GeminiService.generateRescuePlan client error, returning client-side fallback:", err);
+      const step1Id = "step_1";
+      const step2Id = "step_2";
+      const step3Id = "step_3";
+
       return {
+        planId: "client_fallback_" + Math.random().toString(36).substring(2, 9),
         planTitle: `Tactical Delivery Plan: ${task.title}`,
         planSummary: "High-priority tasks sequenced for quick deliverability and basic functional validation.",
+        planningMode: "autonomous",
+        phases: [
+          {
+            phaseId: "phase_1",
+            title: "Phase 1: Setup & Isolation",
+            description: "Assess core assets, prune features and establish functional targets.",
+            estimatedMinutes: Math.ceil(task.estimatedMinutes * 0.3),
+            stepIds: [step1Id]
+          },
+          {
+            phaseId: "phase_2",
+            title: "Phase 2: Development & Integration",
+            description: "Build interfaces, apply schema validations, and finish transactions.",
+            estimatedMinutes: Math.ceil(task.estimatedMinutes * 0.7),
+            stepIds: [step2Id, step3Id]
+          }
+        ],
         steps: [
           {
-            stepId: "step_1",
+            stepId: step1Id,
             title: "Isolate Core MVP",
             description: "Determine the absolute minimum features needed. Strip away logs, optional filters, and premium styling.",
             estimatedMinutes: Math.ceil(task.estimatedMinutes * 0.3),
             urgencyTag: "now",
             completionType: "manual",
+            isEssential: true,
+            phaseId: "phase_1"
           },
           {
-            stepId: "step_2",
+            stepId: step2Id,
             title: "Configure Primary Form/View",
             description: `Build out the main interaction elements for ${task.category} with local state management.`,
             estimatedMinutes: Math.ceil(task.estimatedMinutes * 0.4),
             urgencyTag: "soon",
             completionType: "review",
+            isEssential: true,
+            phaseId: "phase_2"
           },
           {
-            stepId: "step_3",
+            stepId: step3Id,
             title: "Secure and Submit Write Transactions",
             description: "Conduct validation checks and push the active transaction directly to your storage layer.",
             estimatedMinutes: Math.ceil(task.estimatedMinutes * 0.3),
             urgencyTag: "later",
             completionType: "submit",
-          },
+            isEssential: false,
+            phaseId: "phase_2"
+          }
         ],
+        dependencies: [
+          { stepId: step2Id, dependsOnIds: [step1Id] },
+          { stepId: step3Id, dependsOnIds: [step2Id] }
+        ],
+        blockers: [
+          {
+            blockerId: "blocker_1",
+            description: "Integration API keys or Firebase connection latency.",
+            type: "technical",
+            resolutionAction: "Engage local storage mocks and standard offline write queues.",
+            affectStepIds: [step3Id]
+          }
+        ],
+        firstAction: {
+          stepId: step1Id,
+          title: "Isolate Core MVP",
+          description: "Determine the absolute minimum features needed. Strip away logs, optional filters, and premium styling.",
+          reason: "Initial feature pruning must clear visual distractions to accelerate velocity."
+        },
+        nextRecommendedStepId: step2Id,
+        minimumViablePath: [step1Id, step2Id],
+        optionalPolishPath: [step3Id],
         totalEstimatedMinutes: task.estimatedMinutes,
         firstActionLabel: `Begin ${task.title} Rescue`,
         survivalGoal: `Isolate and deploy core interaction elements for ${task.title} to hit the active deadline.`,
@@ -202,6 +339,7 @@ export const GeminiService = {
           "Postponed secondary logger integrations and redundant console trace parameters.",
           "Dropped complex validation filters and multi-user sync hooks."
         ],
+        confidence: 80
       };
     }
   },
@@ -320,6 +458,23 @@ export const GeminiService = {
     tasks: any[],
     userContext?: { workStyle?: string; aggressiveness?: string }
   ): Promise<PersonalizedRecommendationOutput> {
+    const fingerprint = getTasksFingerprint(tasks);
+    
+    try {
+      const cachedStr = localStorage.getItem("prahari_cached_recommendations_payload");
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        const ageMs = Date.now() - cached.timestamp;
+        // Cache recommendation results for 5 minutes
+        if (cached.fingerprint === fingerprint && ageMs < 5 * 60 * 1000) {
+          console.log("[Gemini Client Cache] Returning cached recommendations (Age: " + Math.round(ageMs/1000) + "s)");
+          return cached.data;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to read recommendations cache:", e);
+    }
+
     try {
       const response = await fetch("/api/rescue/recommendations", {
         method: "POST",
@@ -339,11 +494,32 @@ export const GeminiService = {
       if (!result.success) {
         throw new Error(result.error || "Server returned failure");
       }
-      return result.data as PersonalizedRecommendationOutput;
+      
+      const recs = result.data as PersonalizedRecommendationOutput;
+      
+      try {
+        localStorage.setItem("prahari_cached_recommendations_payload", JSON.stringify({
+          fingerprint,
+          timestamp: Date.now(),
+          data: recs
+        }));
+      } catch (e) {}
+      
+      return recs;
     } catch (err) {
       console.error("GeminiService.getPersonalizedRecommendations client error, running deterministic local analysis:", err);
       // Perfect local fallback mapping
-      return this.getLocalFallbackRecommendations(tasks);
+      const fallback = this.getLocalFallbackRecommendations(tasks);
+      
+      try {
+        localStorage.setItem("prahari_cached_recommendations_payload", JSON.stringify({
+          fingerprint,
+          timestamp: Date.now(),
+          data: fallback
+        }));
+      } catch (e) {}
+      
+      return fallback;
     }
   },
 
